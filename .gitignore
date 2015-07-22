@@ -1,0 +1,35 @@
+# Compiled python
+*.py[cod]
+
+# C extensions
+*.so
+
+# Packages
+*.egg
+*.egg-info
+dist
+build
+eggs
+parts
+bin
+var
+sdist
+develop-eggs
+.installed.cfg
+lib
+lib64
+.eggs/
+MANIFEST
+
+# IPython checkpoint not needed with git
+.ipynb_checkpoints/
+
+# Installer logs
+pip-log.txt
+
+# Unit test / coverage reports
+.coverage
+nosetests.xml
+
+# Sphinx
+docs/_build
