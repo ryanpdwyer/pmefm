@@ -2,9 +2,72 @@
 from __future__ import division, absolute_import, print_function
 import numpy as np
 from scipy import signal
+from matplotlib import gridspec
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import h5py
+import sigutils
+
+
+def phase_err(x):
+    return np.pi/2*(signal.sawtooth((x-np.pi/2)*2, width=1))
+
+
+def ex2h5(filename, p):
+
+    with h5py.File(filename, 'w') as f:
+        f['LockinE'] = p.E_mod
+        f['CPD'] = p.phi
+        f['Czz'] = 0
+        f.attrs['Inputs.Scan rate [Hz]'] = p.fs
+        f.attrs['Inputs.Start scan [V]'] = 0
+        f.attrs['Inputs.End scan [V]'] = (p.dx*p.t.size) * 10
+        f.attrs['Inputs.Pos Mod Freq (Hz)'] = p.fx
+        f.attrs['Inputs.Pos Mod rms (V)'] = p.x_m / (
+            np.sqrt(2) * 0.95 * 15 * 100)
+        f.attrs['Inputs.Gate voltage'] = 0
+        f.attrs['Inputs.Drain voltage'] = 0
+
+
+def _h5toPMEFM(filename):
+    with h5py.File(filename, 'r') as f:
+        phi_t = f['CPD'][:]
+        fs = f.attrs['Inputs.Scan rate [Hz]']
+        dt = 1/fs
+        T = phi_t.size * dt
+        fx = f.attrs['Inputs.Pos Mod Freq (Hz)']
+        x_m = f.attrs['Inputs.Pos Mod rms (V)'] * np.sqrt(2) * 0.95 * 15 * 0.1
+        x_tot = (f.attrs['Inputs.End scan [V]'] -
+                 f.attrs['Inputs.Start scan [V]']) * 0.1
+        v_tip = x_tot / T
+
+    return {'fs': fs, 'fx': fx, 'v_tip': v_tip, 'x_m': x_m, 'phi_t': phi_t}
+
+
+def fft(x, t=1, real=True, window='rect'):
+    if isinstance(t, int) or isinstance(t, float):
+        dt = t
+    else:
+        dt = t[1] - t[0]
+
+    if real:
+        fft_func = np.fft.rfft
+        fft_freq_func = np.fft.rfftfreq
+    else:
+        fft_func = np.fft.fft
+        fft_freq_func = np.fft.fftfreq
+
+    window_factor = signal.get_window(window, x.size)
+
+    ft = fft_func(x * window_factor)
+    ft_freq = fft_freq_func(x.size, d=dt)
+
+    return ft, ft_freq
+
+
+def freqdemod_filter_used(f, fc, bw):
+    f_norm = np.abs((f - fc) / bw)
+    return np.where(f_norm <= 1, np.cos(f_norm*np.pi/2), 1e-16)
 
 
 def plot_simple(x, y, magic=None, scale='linear', xlim=None, ylim=None,
@@ -50,6 +113,22 @@ class PMEFMEx(object):
     p.plot_phase()
     p.filt_out()
     """
+
+    labels = {'x_dc':   u"Position [µm]",
+              'x_ac':   u"Position [µm]",
+              'x':     u"Position [µm]",
+              't':      u"Time [s]",
+              'V_dc':  u"Potential [V]",
+              'E_mod': u"Electric Field [V/µm]",
+              'E_dc':  u"Electric Field [V/µm]",
+              'phi_t': u"Potential [V]",}
+
+    rcParams = {'axes.labelsize': 14, 'figure.figsize': (6,4.5)}
+
+    @staticmethod
+    def load_hdf5(filename):
+        return PMEFMEx(**_h5toPMEFM(filename))
+
     def __call__(self, *args):
         if len(args) == 1:
             return getattr(self, args[0])[self.m]
@@ -93,26 +172,35 @@ class PMEFMEx(object):
         elif E_x is not None:
             self.E_x = E_x
             self.E_x_dc = self.E_x(self.x_dc)
-            self.phi_x = np.cumsum(self.E_x_dc) * self.dx
+            self.phi_x = -1 * np.cumsum(self.E_x_dc) * self.dx
             self.phi = np.interp(self.x, self.x_dc, self.phi_x)
         elif phi_t is not None:
             self.phi = phi_t
         else:
             raise ValueError("Must specify phi_x or E_x")
 
-    def set_filters(self, fir_ac=None, fir_dc=None):
+    def fir_filter(self, fir_ac=None, fir_dc=None, f_ac=None, f_dc=None,
+                   a_ac=10, a_dc=10, alpha=None):
         """Apply filters to generate the lock-in and dc components of phi"""
 
         if fir_ac is None:
-            self.fir_ac = signal.firwin(self.fs / (self.fx * 0.5) * 10,
-                                        self.fx * 0.5, nyq=0.5 * self.fs,
+            if f_ac is None and alpha is None:
+                f_ac = self.fx * 0.5
+            elif alpha is not None:
+                f_ac = self.v_tip/self.x_m * alpha
+            self.fir_ac = signal.firwin(self.fs / (f_ac) * a_ac,
+                                        f_ac, nyq=0.5 * self.fs,
                                         window='blackman')
         else:
             self.fir_ac = fir_ac
 
         if fir_dc is None:
-            self.fir_dc = signal.firwin(self.fs/(self.fx*0.5) * 10,
-                                        self.fx*0.5, nyq=0.5*self.fs,
+            if f_dc is None and alpha is None:
+                f_dc = self.fx * 0.5
+            elif alpha is not None:
+                f_dc = self.v_tip/self.x_m * alpha
+            self.fir_dc = signal.firwin(self.fs/(f_dc) * a_dc,
+                                        f_dc, nyq=0.5*self.fs,
                                         window='blackman')
         else:
             self.fir_dc = fir_dc
@@ -132,22 +220,39 @@ class PMEFMEx(object):
                                            self.fir_ac,
                                            mode='same')
 
+        self.V_lock = self.phi_lock
+
         self.phi_lock_a = np.abs(self.phi_lock)
         self.phi_lock_phase = np.unwrap(np.angle(self.phi_lock))
 
-        self.V_dc = signal.fftconvolve(self.phi, self.fir_dc, mode='same')
+        self.phi_dc = signal.fftconvolve(self.phi, self.fir_dc, mode='same')
+        self.V_dc = self.phi_dc
 
-    def plot_phase(self):
+    def plot_phase(self, rcParams={}):
         if not hasattr(self, 'phi_lock_phase'):
             raise ValueError("set_filters before plotting phase")
 
-        plt.plot(self.tm, self.phi_lock_phase[self.m])
-        if hasattr(self, 'm_fit'):
-            plt.plot(self.tm, self.phase[self.m])
-            plt.axvspan(np.min(self.t[self.m_fit]),
-                        np.max(self.t[self.m_fit]),
-                        alpha=0.5,
-                        color='0.5')
+        rcParams_ = self.rcParams
+
+        rcParams_.update(rcParams)
+
+        with mpl.rc_context(rcParams_):
+            fig, ax = plt.subplots()
+            phase = np.angle(self.phi_lock)
+            ax.plot(self.tm, phase[self.m])
+            if hasattr(self, 'phase'):
+                adjusted_phase = phase_err(self.phase - phase)
+                ax.plot(self.tm, (phase + adjusted_phase)[self.m])
+            if hasattr(self, 'm_fit'):
+                ax.axvspan(np.min(self.t[self.m_fit]),
+                           np.max(self.t[self.m_fit]),
+                           alpha=0.5,
+                           color='0.5')
+
+            ax.set_xlabel('Time [s]')
+            ax.set_ylabel('Phase [rad.]')
+
+        return fig, ax
 
     def fit_phase(self, t_min, t_max):
         if not hasattr(self, 'phi_lock_phase'):
@@ -158,11 +263,17 @@ class PMEFMEx(object):
                              self.phi_lock_phase[self.m_fit], 1)
         self.phase = np.polyval(self.mb, self.t)
 
-    def filt_out(self, iir_ac=None, iir_dc=None, alpha=1, n=1):
+    def manual_phase(self, m, b):
+        self.mb = (m, b)
+        self.phase = np.polyval(self.mb, self.t)
+
+    def iir_filt(self, iir_ac=None, iir_dc=None, alpha=1, n=1):
         """Final stage of output filtering, applying an infinite impulse
         response filter to the lockin and dc signals."""
         # Warp factor accounts for using iir filter with filtfilt
         # (running the filter twice)
+        self.alpha = alpha
+        self.n = n
         warp_factor = (np.sqrt(2) - 1)**(-1/(2*n))
         f_dig = self.v_tip / self.x_m / (self.fs/2)
 
@@ -176,20 +287,28 @@ class PMEFMEx(object):
 
             self.iir_dc = signal.butter(n, f_c)
 
-        self.phi_lock_lp = signal.filtfilt(*self.iir_ac, x=self.phi_lock)
+        self.V_lock = signal.filtfilt(*self.iir_ac, x=self.phi_lock)
 
-        self.V_lock_lp = np.real(np.exp(-1j * self.phase) * self.phi_lock_lp)
+        self.V_dc = signal.filtfilt(*self.iir_dc, x=self.phi_dc)
 
-        self.V_dc_lp = signal.filtfilt(*self.iir_dc, x=self.V_dc)
+    def output(self):
 
-        self.E_dc = np.diff(self.V_dc_lp) / self.dx
-        self.E_mod = self.V_lock_lp / self.x_m
+        self.V_ac = np.real(np.exp(-1j * self.phase) * self.V_lock)
+
+        self.E_dc = -1 * np.diff(self.V_dc) / self.dx
+        self.E_mod = self.V_ac / self.x_m
 
     def plot(self, x, y, scale='linear', comp='abs', xlim=None, ylim=None,
              xlabel=None, ylabel=None, figax=None, rcParams={}, **plot_kwargs):
 
         xp = getattr(self, x)[self.m]
         yp = getattr(self, y)[self.m]
+
+        if figax is None:
+            if xlabel is None:
+                xlabel = self.labels.get(x, None)
+            if ylabel is None:
+                ylabel = self.labels.get(y, None)
 
         if np.any(np.iscomplex(yp)):
             if comp == 'abs':
@@ -199,13 +318,106 @@ class PMEFMEx(object):
             elif comp == 'imag':
                 yp = np.imag(yp)
             elif comp == 'both':
-                figax = plot_simple(xp, np.real(yp), scale=scale, xlim=xlim, ylim=ylim,
-                        xlabel=xlabel, ylabel=ylabel, figax=figax,
-                        rcParams=rcParams, **plot_kwargs)
+                figax = plot_simple(xp, np.real(yp), scale=scale,
+                                    xlim=xlim, ylim=ylim,
+                                    xlabel=xlabel,
+                                    ylabel=ylabel,
+                                    figax=figax,
+                                    rcParams=rcParams, **plot_kwargs)
                 yp = np.imag(yp)
 
         figax = plot_simple(xp, yp, scale=scale, xlim=xlim, ylim=ylim,
-                        xlabel=xlabel, ylabel=ylabel, figax=figax,
-                        rcParams=rcParams, **plot_kwargs)
+                            xlabel=xlabel, ylabel=ylabel, figax=figax,
+                            rcParams=rcParams, **plot_kwargs)
 
         return figax
+
+    def plot_filters(self, filters=['fir_ac', 'fir_dc'], k_space=False,
+                     xlim=None, xlog=False, mag_lim=None, phase_lim=None,
+                     gain_point=-3, figax=None, rcParams=None):
+
+        if xlim is None:
+            f_mod_cutoff = self.v_tip / self.x_m
+            if xlog:
+                xlim = np.array([f_mod_cutoff / 10, self.fx])
+            else:
+                xlim = np.array([0, self.fx])
+        else:
+            xlim = np.atleast_1d(xlim)
+
+        if k_space:
+            fs = self.ks
+            xlim = xlim / self.fs * self.ks
+            xlabel = u'Wavenumber [1/µm]'
+        else:
+            fs = self.fs
+            xlabel = u'Frequency [Hz]'
+
+        freq = []
+        resp = []
+        for filter_name in filters:
+            if 'fir' in filter_name:
+                f_, resp_ = sigutils.freqz(getattr(self, filter_name),
+                                           fs=fs, xlim=xlim)
+            elif 'iir' in filter_name:
+                f_, resp_ = sigutils.freqz(*getattr(self, filter_name),
+                                           fs=fs, xlim=xlim)
+                resp_ = resp_ * resp_.conj()
+
+            freq.append(f_)
+            resp.append(resp_)
+
+        figax = sigutils.bodes(freq, resp, xlim=xlim, xlog=xlog,
+                               mag_lim=mag_lim, phase_lim=phase_lim,
+                               gain_point=gain_point, figax=figax,
+                               rcParams=rcParams)
+
+        figax[1][1].set_xlabel(xlabel)
+
+    def plot_output(self, xlim=None, E_lim=None, V_lim=None, grid=False,
+                    minor=False,
+                    figax=None, rcParams={'figure.figsize': (6.5, 6.5),
+                                          'axes.labelsize': 14}):
+        x = self('x_dc')
+
+        if figax is None:
+            with mpl.rc_context(rcParams):
+                fig = plt.figure()
+                gs = gridspec.GridSpec(2, 1, height_ratios=(3, 1))
+                gs.update(hspace=0.001)
+                ax1 = plt.subplot(gs[0])
+                ax2 = plt.subplot(gs[1], sharex=ax1)
+                plt.setp(ax1.get_xticklabels(), visible=False)
+
+        else:
+            fig, (ax1, ax2) = figax
+
+        ax1.plot(x, self('E_mod'), label='mod')
+        ax1.plot(x, self('E_dc'), label='dc')
+        ax2.plot(x, self('V_dc'))
+
+        ax1.set_yticks(ax1.get_yticks()[1:])
+        ax2.set_yticks(ax2.get_yticks()[:-1])
+
+        if xlim is not None:
+            ax2.set_xlim(*xlim)
+        if E_lim is not None:
+            ax1.set_ylim(*E_lim)
+        if V_lim is not None:
+            ax2.set_ylim(*V_lim)
+
+        if minor:
+            x_ticks = ax2.get_xticks()
+            x_major_delta = np.diff(x_ticks)
+            ax2.set_xticks(x_ticks[:-1] + x_major_delta/2,
+                           minor=True)
+
+        ax1.set_ylabel(u"Electric field [V/µm]")
+        ax2.set_xlabel(u"Position [µm]")
+        ax2.set_ylabel(u"Potential [V]")
+
+        if grid:
+            ax1.grid(which='both', color='0.8', linestyle='-')
+            ax2.grid(which='both', color='0.8', linestyle='-')
+
+        return fig, (ax1, ax2)
