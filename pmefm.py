@@ -37,6 +37,7 @@ def _matched_filters(p, N_pts, dec=16, window='hann', n_pts_eval_fir=48000):
 
     return fir_ac, fir_dc
 
+
 def phase_err(x):
     return np.pi/2*(signal.sawtooth((x-np.pi/2)*2, width=1))
 
