@@ -2,12 +2,20 @@
 from __future__ import division, absolute_import, print_function
 import numpy as np
 from scipy import signal
+from scipy.special import j0, j1, jn, jn_zeros
 from matplotlib import gridspec
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import h5py
 import sigutils
 
+
+def _j1filt(x):
+    return np.where(x == 0, np.ones_like(x), np.where(x < jn_zeros(0, 1)[0],
+                             j0(x) / (2 * j1(x)/x), np.zeros_like(x)))
+
+def _j0filt(x):
+    return np.where(x < jn_zeros(0, 1)[0], 1, 0)
 
 def phase_err(x):
     return np.pi/2*(signal.sawtooth((x-np.pi/2)*2, width=1))
@@ -162,6 +170,12 @@ class PMEFMEx(object):
         self.dx = self.v_tip / self.fs
         self.ks = 1 / self.dx
         self.x_m = x_m
+
+        self.k0_dc = jn_zeros(0, 1)[0] / (2 * np.pi * x_m)
+        self.k0_ac = jn_zeros(1, 1)[0] / (2 * np.pi * x_m)
+        self.f0_dc = self.k0_dc * self.v_tip
+        self.f0_ac = self.k0_ac * self.v_tip
+
         self.x_dc = self.v_tip * self.t
         self.x_ac = x_m * np.sin(2*np.pi*self.fx*self.t)
         self.x = self.x_dc + self.x_ac
@@ -180,30 +194,49 @@ class PMEFMEx(object):
             raise ValueError("Must specify phi_x or E_x")
 
     def fir_filter(self, fir_ac=None, fir_dc=None, f_ac=None, f_dc=None,
-                   a_ac=10, a_dc=10, alpha=None):
+                   a_ac=10, a_dc=10, alpha=None, filter_name=None, **kwargs):
         """Apply filters to generate the lock-in and dc components of phi"""
 
-        if fir_ac is None:
-            if f_ac is None and alpha is None:
-                f_ac = self.fx * 0.5
-            elif alpha is not None:
-                f_ac = self.v_tip/self.x_m * alpha
-            self.fir_ac = signal.firwin(self.fs / (f_ac) * a_ac,
-                                        f_ac, nyq=0.5 * self.fs,
-                                        window='blackman')
-        else:
-            self.fir_ac = fir_ac
+        if filter_name == 'bessel_matched':
+            x_m = self.x_m
+            N_pts = kwargs.get('N_pts', int(self.ks / self.k0_dc * 5))
+            dec = kwargs.get('dec', 32)
+            n_pts_eval_fir = kwargs.get('n_pts_eval_fir', 48000)
+            k = np.linspace(0, self.ks/2, n_pts_eval_fir)
+            resp_ac = _j1filt(k * 2*np.pi*x_m)
 
-        if fir_dc is None:
-            if f_dc is None and alpha is None:
-                f_dc = self.fx * 0.5
-            elif alpha is not None:
-                f_dc = self.v_tip/self.x_m * alpha
-            self.fir_dc = signal.firwin(self.fs/(f_dc) * a_dc,
-                                        f_dc, nyq=0.5*self.fs,
-                                        window='blackman')
-        else:
+            N = N_pts // dec
+            fir_ac_dec = signal.firwin2(N, k, resp_ac, nyq=ks/2, window=window)
+            fir_dc_dec = signal.firwin(N, self.k0_dc, nyq=ks/2, window=window)
+
+            fir_ac = np.fft.irfft(np.fft.rfft(fir_ac_dec), fir_ac_dec.size*dec)
+            fir_dc = np.fft.irfft(np.fft.rfft(fir_dc_dec), fir_dc_dec.size*dec)
+
+            self.fir_ac = fir_ac
             self.fir_dc = fir_dc
+            return
+        else:
+            if fir_ac is None:
+                if f_ac is None and alpha is None:
+                    f_ac = self.fx * 0.5
+                elif alpha is not None:
+                    f_ac = self.v_tip/self.x_m * alpha
+                self.fir_ac = signal.firwin(self.fs / (f_ac) * a_ac,
+                                            f_ac, nyq=0.5 * self.fs,
+                                            window='blackman')
+            else:
+                self.fir_ac = fir_ac
+
+            if fir_dc is None:
+                if f_dc is None and alpha is None:
+                    f_dc = self.fx * 0.5
+                elif alpha is not None:
+                    f_dc = self.v_tip/self.x_m * alpha
+                self.fir_dc = signal.firwin(self.fs/(f_dc) * a_dc,
+                                            f_dc, nyq=0.5*self.fs,
+                                            window='blackman')
+            else:
+                self.fir_dc = fir_dc
 
         indices = np.arange(self.phi.size)
         fir_ac_size = self.fir_ac.size
