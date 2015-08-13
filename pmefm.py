@@ -12,10 +12,30 @@ import sigutils
 
 def _j1filt(x):
     return np.where(x == 0, np.ones_like(x), np.where(x < jn_zeros(0, 1)[0],
-                             j0(x) / (2 * j1(x)/x), np.zeros_like(x)))
+                    j0(x) / (2 * j1(x)/x), np.zeros_like(x)))
+
 
 def _j0filt(x):
     return np.where(x < jn_zeros(0, 1)[0], 1, 0)
+
+
+def _matched_filters(p, N_pts, dec=16, window='hann', n_pts_eval_fir=48000):
+    ks = p.ks / dec
+    x_m = p.x_m
+    N = N_pts // dec
+    n_pts_eval_fir = 48000
+    k = np.linspace(0, ks/2, n_pts_eval_fir)
+
+    resp_ac = _j1filt(k*2 * np.pi * x_m)
+
+    fir_ac_dec = signal.firwin2(N, k, resp_ac, nyq=k[-1], window=window)
+    fir_dc_dec = signal.firwin(N, jn_zeros(0, 1)[0] / (2*np.pi*x_m),
+                               nyq=k[-1], window=window)
+
+    fir_ac = np.fft.irfft(np.fft.rfft(fir_ac_dec), fir_ac_dec.size * dec)
+    fir_dc = np.fft.irfft(np.fft.rfft(fir_dc_dec), fir_dc_dec.size * dec)
+
+    return fir_ac, fir_dc
 
 def phase_err(x):
     return np.pi/2*(signal.sawtooth((x-np.pi/2)*2, width=1))
@@ -167,6 +187,7 @@ class PMEFMEx(object):
 
         self.fx = fx
         self.v_tip = v_tip
+        self.kx = self.fx / self.v_tip
         self.dx = self.v_tip / self.fs
         self.ks = 1 / self.dx
         self.x_m = x_m
@@ -198,23 +219,16 @@ class PMEFMEx(object):
         """Apply filters to generate the lock-in and dc components of phi"""
 
         if filter_name == 'bessel_matched':
-            x_m = self.x_m
-            N_pts = kwargs.get('N_pts', int(self.ks / self.k0_dc * 5))
+            N_pts = kwargs.get('N_pts', int(self.ks / self.k0_dc * 6))
             dec = kwargs.get('dec', 32)
-            n_pts_eval_fir = kwargs.get('n_pts_eval_fir', 48000)
-            k = np.linspace(0, self.ks/2, n_pts_eval_fir)
-            resp_ac = _j1filt(k * 2*np.pi*x_m)
+            n_pts_eval_fir = kwargs.get('n_pts_eval_fir', 2**16)
+            window = kwargs.get('window', 'hann')
 
-            N = N_pts // dec
-            fir_ac_dec = signal.firwin2(N, k, resp_ac, nyq=ks/2, window=window)
-            fir_dc_dec = signal.firwin(N, self.k0_dc, nyq=ks/2, window=window)
-
-            fir_ac = np.fft.irfft(np.fft.rfft(fir_ac_dec), fir_ac_dec.size*dec)
-            fir_dc = np.fft.irfft(np.fft.rfft(fir_dc_dec), fir_dc_dec.size*dec)
+            fir_ac, fir_dc = _matched_filters(self, N_pts, dec, window,
+                                              n_pts_eval_fir)
 
             self.fir_ac = fir_ac
             self.fir_dc = fir_dc
-            return
         else:
             if fir_ac is None:
                 if f_ac is None and alpha is None:
@@ -370,17 +384,21 @@ class PMEFMEx(object):
                      gain_point=-3, figax=None, rcParams=None):
 
         if xlim is None:
-            f_mod_cutoff = self.v_tip / self.x_m
-            if xlog:
-                xlim = np.array([f_mod_cutoff / 10, self.fx])
+            if k_space:
+                x_min = self.k0_dc / 20
+                x_max = self.kx
             else:
-                xlim = np.array([0, self.fx])
+                x_min = self.f0_dc / 20
+                x_max = self.fx
+            if xlog:
+                xlim = np.array([x_min, x_max])
+            else:
+                xlim = np.array([0, x_max])
         else:
             xlim = np.atleast_1d(xlim)
 
         if k_space:
             fs = self.ks
-            xlim = xlim / self.fs * self.ks
             xlabel = u'Wavenumber [1/µm]'
         else:
             fs = self.fs
