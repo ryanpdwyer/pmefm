@@ -19,18 +19,21 @@ def _j0filt(x):
     return np.where(x < jn_zeros(0, 1)[0], 1, 0)
 
 
-def _matched_filters(p, N_pts, dec=16, window='hann', n_pts_eval_fir=48000):
-    ks = p.ks / dec
-    x_m = p.x_m
+def _matched_filters(ks, x_m, N_pts, dec=16, window='hann', n_pts_eval_fir=48000):
+    ks = ks / dec
     N = N_pts // dec
-    n_pts_eval_fir = 48000
     k = np.linspace(0, ks/2, n_pts_eval_fir)
 
-    resp_ac = _j1filt(k*2 * np.pi * x_m)
+    resp_ac = _j1filt(k * 2 * np.pi * x_m)
 
     fir_ac_dec = signal.firwin2(N, k, resp_ac, nyq=k[-1], window=window)
     fir_dc_dec = signal.firwin(N, jn_zeros(0, 1)[0] / (2*np.pi*x_m),
                                nyq=k[-1], window=window)
+
+    # Manually force gain to 1 at DC; firwin2 rounding errors probable cause of
+    # minor losses (< 1 percent)
+    fir_ac_dec = fir_ac_dec / np.sum(fir_ac_dec)
+    fir_dc_dec = fir_dc_dec / np.sum(fir_dc_dec)
 
     fir_ac = np.fft.irfft(np.fft.rfft(fir_ac_dec), fir_ac_dec.size * dec)
     fir_dc = np.fft.irfft(np.fft.rfft(fir_dc_dec), fir_dc_dec.size * dec)
@@ -225,7 +228,7 @@ class PMEFMEx(object):
             n_pts_eval_fir = kwargs.get('n_pts_eval_fir', 2**16)
             window = kwargs.get('window', 'hann')
 
-            fir_ac, fir_dc = _matched_filters(self, N_pts, dec, window,
+            fir_ac, fir_dc = _matched_filters(self.ks, self.x_m, N_pts, dec, window,
                                               n_pts_eval_fir)
 
             self.fir_ac = fir_ac
