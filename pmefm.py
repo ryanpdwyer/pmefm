@@ -3,6 +3,7 @@ from __future__ import division, absolute_import, print_function
 import numpy as np
 from scipy import signal
 from scipy.special import j0, j1, jn, jn_zeros
+from scipy import optimize
 from matplotlib import gridspec
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -13,7 +14,6 @@ import sigutils
 def _j1filt(x):
     return np.where(x == 0, np.ones_like(x), np.where(x < jn_zeros(0, 1)[0],
                     j0(x) / (2 * j1(x)/x), np.zeros_like(x)))
-
 
 def _j0filt(x):
     return np.where(x < jn_zeros(0, 1)[0], 1, 0)
@@ -43,6 +43,10 @@ def _matched_filters(ks, x_m, N_pts, dec=16, window='hann', n_pts_eval_fir=48000
 
 def phase_err(x):
     return np.pi/2*(signal.sawtooth((x-np.pi/2)*2, width=1))
+
+def _fit_phase(t, phase, amp):
+    f = lambda x: np.sum(amp**2*abs((abs(abs(phase - (x[0]*t + x[1])) - np.pi/2) - np.pi/2))**2)
+    return f
 
 
 def ex2h5(filename, p):
@@ -274,7 +278,7 @@ class PMEFMEx(object):
         self.V_lock = self.phi_lock
 
         self.phi_lock_a = np.abs(self.phi_lock)
-        self.phi_lock_phase = np.unwrap(np.angle(self.phi_lock))
+        self.phi_lock_phase = np.angle(self.phi_lock)
 
         self.phi_dc = signal.fftconvolve(self.phi, self.fir_dc, mode='same')
         self.V_dc = self.phi_dc
@@ -306,13 +310,31 @@ class PMEFMEx(object):
         return fig, ax
 
     def fit_phase(self, t_min, t_max):
-        if not hasattr(self, 'phi_lock_phase'):
+        DeprecationWarning("'fit_phase' is deprecated. Use 'linfit_phase' instead")
+        if not hasattr(self, 'phi_lock'):
             raise ValueError("set_filters before fitting mask")
 
         self.m_fit = np.logical_and(self.t >= t_min, self.t < t_max)
+        phi_lock_phase = np.unwrap(np.angle(self.phi_lock[self.m_fit]))
+
+  
         self.mb = np.polyfit(self.t[self.m_fit],
-                             self.phi_lock_phase[self.m_fit], 1)
+                             phi_lock_phase, 1)
         self.phase = np.polyval(self.mb, self.t)
+
+    linfit_phase = fit_phase
+
+    def auto_phase(self, x0=np.array([0., 0.])):
+        """"""
+        m = self.m
+        self.mb = optimize.fmin_slsqp(_fit_phase(self.t[m],
+                                                 self.phi_lock_phase[m],
+                                                 self.phi_lock_a[m]),
+                                      x0,)
+
+
+        self.phase = np.polyval(self.mb, self.t)
+
 
     def manual_phase(self, m, b):
         self.mb = (m, b)
