@@ -8,7 +8,232 @@ from matplotlib import gridspec
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import h5py
+import pandas as pd
 import sigutils
+from scipy.signal.signaltools import _centered
+
+
+# Inputs: t, x
+# Cantilever amplitude, phase, frequency
+# FIR filter (check response at f_c)
+# Infer cantilever frequency if necessary
+# Modulate, run through filter
+# Amp, phase, fit_phase (assume zero)
+# Outputs:
+# A, dphi, f0
+
+def _fit_phase(t, phase, amp, phase_reversals=True):
+    if phase_reversals:
+        dphi_max = np.pi/2
+    else:
+        dphi_max = np.pi
+    f = lambda x: np.sum(amp**2*abs((abs(abs(phase - (x[0]*t + x[1])) - dphi_max) - dphi_max))**2)
+    return f
+
+def auto_phase(t, z, x0=np.array([0., 0.]), phase_reversals=True):
+    """"""
+    phase = np.angle(z)
+    amp   = abs(z)
+    return optimize.fmin_slsqp(_fit_phase(t, phase, amp, phase_reversals), x0,)
+
+
+def freq_from_fft(sig, fs):
+    """Estimate frequency from peak of FFT
+    
+    """
+    # Compute Fourier transform of windowed signal
+    windowed = sig * signal.blackmanharris(len(sig))
+    f = np.fft.rfft(windowed)
+    
+    # Find the peak and interpolate to get a more accurate peak
+    i = np.argmax(abs(f)) # Just use this for less-accurate, naive version
+    true_i = parabolic(np.log(abs(f)), i)[0]
+    
+    # Convert to equivalent frequency
+    return fs * true_i / len(windowed)
+
+
+def parabolic(f, x):
+    """Quadratic interpolation for estimating the true position of an
+    inter-sample maximum when nearby samples are known.
+   
+    f is a vector and x is an index for that vector.
+   
+    Returns (vx, vy), the coordinates of the vertex of a parabola that goes
+    through point x and its two neighbors.
+   
+    Example:
+    Defining a vector f with a local maximum at index 3 (= 6), find local
+    maximum if points 2, 3, and 4 actually defined a parabola.
+   
+    In [3]: f = [2, 3, 1, 6, 4, 2, 3, 1]
+   
+    In [4]: parabolic(f, argmax(f))
+    Out[4]: (3.2142857142857144, 6.1607142857142856)
+   
+    """
+    xv = 1/2. * (f[x-1] - f[x+1]) / (f[x-1] - 2 * f[x] + f[x+1]) + x
+    yv = f[x] - 1/4. * (f[x-1] - f[x+1]) * (xv - x)
+    return (xv, yv)
+
+def _print_magnitude_data(w, rep, fs):
+    df = pd.DataFrame()
+    df['f'] = w /(2*np.pi) * fs
+    df['mag'] = abs(rep)
+    df['dB'] = 20 * np.log10(df['mag'].values)
+    print(df.to_string(index=False, float_format="{:.2f}".format))
+    return df
+
+
+# x data
+# (guess f0)
+# filter (b, a)
+# phasing
+# Don't actually need time data
+
+
+class LockIn(object):
+    def __init__(self, t, x, fs):
+        self.t = t
+        self.x = x
+        self.fs = fs
+
+        self.f0_est = freq_from_fft(self.x - np.mean(self.x), self.fs)
+
+    def lock(self, f0=None, bw_ratio=0.5, coeff_ratio=9., bw=None, coeffs=None,
+            window='blackman'):
+
+        t = self.t
+        fs = self.fs
+        if f0 is None:
+            self.f0 = f0 = self.f0_est
+
+        if bw is None:
+            bw = bw_ratio * f0 / (self.fs/2)
+        else:
+            bw = bw / (self.fs/2)
+
+        if coeffs is None:
+            coeffs = round(coeff_ratio / bw, 0)
+            if coeffs > self.x.size:
+                raise ValueError(
+"""No valid output when 'coeffs' > t.size (coeffs: {}, t.size: {}).
+Reduce coeffs by increasing bw, bw_ratio, or decreasing coeff_ratio,
+or provide more data.""".format(coeffs, t.size))
+
+        self.b = b = signal.firwin(coeffs, bw, window=window)
+
+        w, rep = signal.freqz(b, worN=np.pi*np.array([0., bw/2, bw, f0/(self.fs/2.), 1.]))
+
+        print("Response:")
+        _print_magnitude_data(w, rep, fs)
+
+        self.z = z = signal.fftconvolve(self.x * np.exp(-2j*np.pi*f0*t), 2*b,
+                                       "same")
+
+        n_fir = b.size
+        indices = np.arange(t.size)
+        # Valid region mask
+        # This is borrowed explicitly from scipy.signal.sigtools.fftconvolve
+        self.m = m = _centered(indices, t.size - n_fir + 1)
+
+        self.A = abs(self.z)
+        self.phi = np.angle(self.z)
+
+    def lock2(self, f0=None, fp_ratio=0.1, fc_ratio=0.75, coeff_ratio=3,
+              fp=None, fc=None, coeffs=None, window='blackman'):
+        t = self.t
+        fs = self.fs
+        nyq = fs/2
+        if f0 is None:
+            self.f0 = f0 = self.f0_est
+
+        if fp is None:
+            fp = fp_ratio * f0 / nyq
+        else:
+            fp = fp / nyq
+
+        if fc is None:
+            fc = fc_ratio * f0 / nyq
+        else:
+            fc = fc / nyq
+
+        if coeffs is None:
+            coeffs = round(coeff_ratio / fc, 0)
+            if coeffs > self.x.size:
+                raise ValueError(
+"""No valid output when 'coeffs' > t.size (coeffs: {}, t.size: {}).
+Reduce coeffs by increasing bw, bw_ratio, or decreasing coeff_ratio,
+or provide more data.""".format(coeffs, t.size))
+
+        alpha = (1-fp*1.0/fc)
+        n = int(round(1000. / alpha) // 2)
+        N = n * 2 +1
+        f = np.linspace(0, fc, n+1)
+
+        fm = np.zeros(n + 2)
+        mm = np.zeros(n + 2)
+        fm[:-1] = f
+        fm[-1] = 1.
+        m = signal.tukey(N, alpha=alpha)
+        mm[:-1] = m[n:]
+
+        b = signal.firwin2(coeffs, fm, mm,
+                                    nfreqs=2**(int(round(np.log2(coeffs)))+3)+1,
+                                    window=window)
+
+        self.b = b = b / np.sum(b)
+
+        w, rep = signal.freqz(b, worN=np.pi*np.array([0., fp/2, fp, fc, f0/nyq, 1.]))
+
+        print("Response:")
+        _print_magnitude_data(w, rep, fs)
+
+        self.z = z = signal.fftconvolve(self.x * np.exp(-2j*np.pi*f0*t), 2*b,
+                                       "same")
+
+        n_fir = b.size
+        indices = np.arange(t.size)
+        # Valid region mask
+        # This is borrowed explicitly from scipy.signal.sigtools.fftconvolve
+        self.m = m = np.zeros_like(t, dtype=bool)
+        self.m[_centered(indices, t.size - n_fir + 1)] = True
+
+        self.A = abs(self.z)
+        self.phi = np.angle(self.z)
+
+
+    def autophase(self, ti=None, tf=None, unwrap=False, x0=[0., 0.]):
+        t = self.t
+        m = self.m
+        z = self.z
+
+        if unwrap:
+            phi = np.unwrap(self.phi)
+        else:
+            phi = self.phi
+
+        if ti is None and tf is None:
+            mask = m
+        elif ti is not None and tf is None:
+            mask = m & (t >= ti)
+        elif ti is None and tf is not None:
+            mask = m & (t < tf)
+        else:
+            mask = m & (t >= ti) & (t < tf)
+
+
+        self.mb = mb = auto_phase(t[mask], z[mask], x0)
+
+        self.phi_fit = np.polyval(mb, t)
+
+        self.dphi = np.unwrap(((self.phi - self.phi_fit + np.pi) % (2*np.pi)) - np.pi)
+
+        self.df = np.zeros(t.size)
+        self.df[1:] = np.diff(self.dphi) * self.fs / (2*np.pi)
+
+        self.f0 = self.f0 + mb[0]
+
 
 
 def _j1filt(x):
@@ -43,10 +268,6 @@ def _matched_filters(ks, x_m, N_pts, dec=16, window='hann', n_pts_eval_fir=48000
 
 def phase_err(x):
     return np.pi/2*(signal.sawtooth((x-np.pi/2)*2, width=1))
-
-def _fit_phase(t, phase, amp):
-    f = lambda x: np.sum(amp**2*abs((abs(abs(phase - (x[0]*t + x[1])) - np.pi/2) - np.pi/2))**2)
-    return f
 
 
 def ex2h5(filename, p):
@@ -439,6 +660,7 @@ class PMEFMEx(object):
             elif 'iir' in filter_name:
                 f_, resp_ = sigutils.freqz(*getattr(self, filter_name),
                                            fs=fs, xlim=xlim)
+                # iir filter applied twice with filtfilt
                 resp_ = resp_ * resp_.conj()
 
             freq.append(f_)
