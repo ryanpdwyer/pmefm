@@ -123,7 +123,7 @@ def lock2(f0, fp, fc, fs, coeff_ratio=8, coeffs=None,
 
     b = b / np.sum(b)
 
-    w, rep = signal.freqz(b, worN=np.pi*np.array([0., fp/2, fp, fc,
+    w, rep = signal.freqz(b, worN=np.pi*np.array([0., fp/2, fp, fc, 2*fc,
                                                   0.5*f0/nyq, f0/nyq, 1.]))
 
     print("Response:")
