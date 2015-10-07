@@ -21,8 +21,7 @@ setup(
     url='https://github.com/ryanpdwyer/myscipkg4',
     zip_safe=False,
     # include_package_data=True,
-    modules=['pmefm','lockin'],
-
+    py_modules=['pmefm', 'lockin'],
     # Add requirements here. If the requirement is difficult to install,
     # add to docs/conf.py MAGIC_MOCK, and .travis.yml 'conda install ...'
     install_requires=['numpy', 'scipy', 'matplotlib', "Click"],
@@ -31,6 +30,7 @@ setup(
     entry_points='''
         [console_scripts]
         lockcli=lockin:lockcli
+        firlockstate=lockin:firlockstate
     ''',
     keywords='myscipkg4',
     classifiers=[

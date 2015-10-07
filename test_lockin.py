@@ -37,4 +37,14 @@ def test_FIRStateLock():
     assert_array_almost_equal(A_out, A_expected, decimal=5)
 
 
+def test_FIRStateLock_indices():
+    x = np.array([0., 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+    h = np.array([0.25, 0.25, 0.25, 0.25])/2.
+    dec = 2
+    f0 = 0.
+    fs = 1.
+    firstate = FIRStateLock(h, 2, f0, 0., fs=1.)
+    firstate.filt(x)
+    exp_z = np.array([1.5, 3.5, 5.5, 7.5, 9.5, 11.5, 13.5])
+    assert_array_almost_equal(firstate.z_out, exp_z)
 
