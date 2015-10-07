@@ -194,7 +194,7 @@ or provide more data.""".format(coeffs, t.size))
         if fc is None:
             fc = fc_ratio * f0
 
-        b = lock2(f0, fp, fc, fs, coeff_ratio, coeffs, window='blackman')
+        self.fir = b = lock2(f0, fp, fc, fs, coeff_ratio, coeffs, window)
 
         if coeffs > self.x.size:
             raise ValueError(
