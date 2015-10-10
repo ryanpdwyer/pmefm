@@ -96,7 +96,10 @@ def _print_magnitude_data(w, rep, fs):
 # Don't actually need time data
 
 def lock2(f0, fp, fc, fs, coeff_ratio=8, coeffs=None,
-          window='blackman'):
+          window='blackman', print_response=True):
+    """Create a gentle fir filter. Pass frequencies below fp, cutoff frequencies
+    above fc, and gradually taper to 0 in between.
+    """
     nyq = fs/2
     fp = fp / nyq
     fc = fc / nyq
@@ -104,15 +107,17 @@ def lock2(f0, fp, fc, fs, coeff_ratio=8, coeffs=None,
     if coeffs is None:
         coeffs = int(round(coeff_ratio / fc, 0))
 
-    # Force number of coefficients even
+    # Force number of coefficients odd
     alpha = (1-fp*1.0/fc)
     n = int(round(1000. / alpha) // 2)
+
     N = n * 2 + 1
     f = np.linspace(0, fc, n+1)
 
     fm = np.zeros(n + 2)
     mm = np.zeros(n + 2)
     fm[:-1] = f
+    # Append fm = nyquist frequency by hand; needed by firwin2
     fm[-1] = 1.
     m = signal.tukey(N, alpha=alpha)
     mm[:-1] = m[n:]
@@ -125,9 +130,9 @@ def lock2(f0, fp, fc, fs, coeff_ratio=8, coeffs=None,
 
     w, rep = signal.freqz(b, worN=np.pi*np.array([0., fp/2, fp, fc, 2*fc,
                                                   0.5*f0/nyq, f0/nyq, 1.]))
-
-    print("Response:")
-    _print_magnitude_data(w, rep, fs)
+    if print_response:
+        print("Response:")
+        _print_magnitude_data(w, rep, fs)
 
     return b
 
@@ -244,7 +249,7 @@ or provide more data.""".format(coeffs, t.size))
 
         self.df = np.gradient(self.dphi) * self.fs / (2*np.pi)
 
-        self.f0 = self.f0 + mb[0]
+        self.f0corr = self.f0 + mb[0]
 
     def phase(self, ti=None, tf=None, weight=True):
         t = self.t
@@ -264,11 +269,17 @@ or provide more data.""".format(coeffs, t.size))
         std = np.std(self.phi[mask])
         phi_norm = phi / std
 
-        if weight:
-            A = abs(z[mask]) / np.std(abs(z[mask]))
-            self.mb = mb = np.polyfit(t[mask], phi_norm, 1, w=A) * std
-        else:
-            self.mb = mb = np.polyfit(t[mask], phi_norm, 1) * std
+        try:
+            if weight:
+                A = abs(z[mask]) / np.std(abs(z[mask]))
+                self.mb = mb = np.polyfit(t[mask], phi_norm, 1, w=A) * std
+            else:
+                self.mb = mb = np.polyfit(t[mask], phi_norm, 1) * std
+        except TypeError:
+            print(t)
+            print(ti)
+            print(tf)
+            raise
 
         self.phi_fit = np.polyval(mb, t)
 
@@ -278,7 +289,7 @@ or provide more data.""".format(coeffs, t.size))
         self.df = np.zeros(t.size)
         self.df = np.gradient(self.dphi) * self.fs / (2*np.pi)
 
-        self.f0 = self.f0 + mb[0] / (2*np.pi)
+        self.f0corr = self.f0 + mb[0] / (2*np.pi)
 
     def decimate(self, factor=None):
         if factor is None:
@@ -309,12 +320,17 @@ or provide more data.""".format(coeffs, t.size))
         phi = np.unwrap(np.angle(z))
         std = np.std(phi[mask])
         phi_norm = phi / std
-
-        if weight:
-            A = abs(z[mask]) / np.std(abs(z[mask]))
-            self.mb = mb = np.polyfit(t[mask], phi_norm[mask], 1, w=A) * std
-        else:
-            self.mb = mb = np.polyfit(t[mask], phi_norm[mask], 1) * std
+        try:
+            if weight:
+                A = abs(z[mask]) / np.std(abs(z[mask]))
+                self.mb = mb = np.polyfit(t[mask], phi_norm[mask], 1, w=A) * std
+            else:
+                self.mb = mb = np.polyfit(t[mask], phi_norm[mask], 1) * std
+        except TypeError:
+            print(t)
+            print(ti)
+            print(tf)
+            raise
 
         phi_fit = np.polyval(mb, t)
 
@@ -427,6 +443,58 @@ class FIRStateLockVarF(object):
         return self.t0_dec + np.arange(self.z_out.size)/self.fs * self.dec
 
 
+
+
+def workup_gr(ds, T_before, T_after, T_bf=0.03, T_af=0.06, fp=1000, fc=4000,
+              fs_dec=16000, t0=0.05):
+    """Lockin workup of the data in h5py dataset ds.
+    This assumes that ds contains attributes dt, pulse time, which enable us to
+    perform the workup."""
+    dt = ds.attrs['dt']
+    tp = ds.attrs['pulse time']
+    fs = 1. / dt
+    y = ds[:]
+    x = np.arange(y.size, dtype=np.float64)*dt
+    li = LockIn(x, y, fs)
+    li.lock2(fp=fp, fc=fc)
+    tedge = li.fir.size * dt / 2
+    li.phase(ti=t0-T_bf-tedge, tf=t0-tedge)
+    f1 = li.f0corr
+    phi0 = (- li.phi[0])
+    li.phase(ti=(t0+tp+tedge), tf=(t0+tp+T_af+tedge))
+    f2 = li.f0corr
+    dec = int(np.floor(fs / fs_dec))
+    def f_var(t):
+        return np.where(t > t0 + tp, f2, f1)
+    lockstate = FIRStateLockVarF(li.fir, dec, f_var, phi0, fs=fs)
+    lockstate.filt(y)
+    lockstate.dphi = np.unwrap(np.angle(lockstate.z_out))
+    lockstate.df = np.gradient(lockstate.dphi) * (
+            fs / (dec * 2*np.pi))
+    
+    lockstate.tp = tp
+    lockstate.t = t = lockstate.get_t()
+    lockstate.delta_phi = (np.mean(lockstate.dphi[(t >= (t0 + tp)) & (t < t0 + tp + T_after)]) - 
+                            np.mean(lockstate.dphi[(t >= (t0 - T_before)) & (t < t0)])
+                           )
+    return lockstate
+
+def workup_file(gr, out_file, T_before, T_after,
+                T_bf=0.03, T_af=0.06, fp=1000, fc=4000, fs_dec=16000, t0=0.05,
+                overwrite=False, show_progress=True):
+    out = []
+    tp = []
+    N = len(gr.items())
+    m = int(N//10)
+    i = 1
+    for ds_name, ds in gr.items():
+        out.append(workup_gr(ds, T_before, T_after, T_bf, T_af, fp, fc, fs_dec, t0))
+        tp.append(ds.attrs['pulse time'])
+        if show_progress and i % m == 0:
+            print("{i}/{N} complete")
+        i += 1
+
+    return tp, out
 
 @click.command()
 @click.argument('fp', type=float)
