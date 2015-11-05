@@ -31,6 +31,8 @@ setup(
         [console_scripts]
         lockcli=lockin:lockcli
         firlockstate=lockin:firlockstate
+        adiabatic_phasekick=lockin:adiabatic_phasekick_cli
+        workup_adiabatic_avg=lockin:workup_adiabatic_avg
     ''',
     keywords='myscipkg4',
     classifiers=[
