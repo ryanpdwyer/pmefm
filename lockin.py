@@ -678,7 +678,7 @@ def workup_adiabatic_avg(filename, fp, fc, ti, tf, tiphase):
     popts = np.array(popts)
     df = pd.DataFrame(data=popts*np.array([1., 1000., 1]), index=index,
                       columns=['df', 'tau', 'f0'])
-    df.to_csv(csv, index=False)  
+    df.to_csv(csv, index=True)  
 
     print(popts.mean(0))
     print(popts.std(0, ddof=1))
