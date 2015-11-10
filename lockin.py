@@ -483,10 +483,45 @@ def workup_gr(ds, T_before, T_after, T_bf=0.03, T_af=0.06, fp=1000, fc=4000,
 
 def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
                         fp, fc, fs_dec):
+    """Workup an individual adiabatic phasekick dataset, starting from the raw
+    cantilever vs. time data.
+
+    Parameters
+    ----------
+
+    y: array
+        Cantilever displacement vs time.
+    dt: float
+        Spacing between time points.
+    tp: float
+        Pulse time.
+    t0: float
+        Initial time, using the convention that the pulse starts at t = 0.
+    T_before: float
+        Time to average phase before the pulse time.
+    T_after: float
+        Time to average phase after the pulse time.
+    T_bf: float
+        Time to average frequency before pulse time.
+    T_af: float
+        Time to average frequency after the pulse time.
+    fp: float
+        Lock-in filter setting: pass frequencies below ``fp``.
+    fc: float
+        Lock-in filter setting: cutoff frequencies above ``fc``.
+    fs_dec: float
+        Lock-in setting: Decimate to a sampling frequency ``fs_dec``.
+
+    Returns
+    -------
+    FIRStateLockVarF
+        An FIRStateLockVarF instance.
+
+    """
     fs = 1. / dt
     tp = tp # ms to s
-    x = np.arange(y.size) * dt + t0
-    li = LockIn(x, y, fs)
+    t = np.arange(y.size) * dt + t0
+    li = LockIn(t, y, fs)
     li.lock2(fp=fp, fc=fc)
     tedge = li.fir.size * dt / 2
     li.phase(ti=-T_bf, tf=0)
@@ -494,6 +529,7 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
     phi0 = -li.phi[0]
     li.phase(ti=tp, tf=(tp+T_af))
     f2 = li.f0corr
+    # Decimate by a conservative factor
     dec = int(np.floor(fs / fs_dec))
     
     def f_var(t):
@@ -514,11 +550,10 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
     return lockstate
 
 
-def plot_phasekick_control(dfawc):
+def plot_phasekick_control(df):
     fig, ax = plt.subplots()
-    
-    ax.plot(dfawc['tp [s]']*1e3, dfawc['control dphi [cyc]'], 'bo')
-    ax.plot(dfawc['tp [s]']*1e3, dfawc['data dphi [cyc]'], 'go')
+    ax.plot(df['tp [s]']*1e3, df['control dphi [cyc]'], 'bo')
+    ax.plot(df['tp [s]']*1e3, df['data dphi [cyc]'], 'go')
     ax.set_xlabel('tp [ms]')
     ax.set_ylabel('phase shift [cyc.]')
     return fig, ax
@@ -534,6 +569,8 @@ def delta_phi_group(subgr, tp, T_before, T_after, T_bf=0.025, T_af=0.04,
 
 def workup_adiabatic_w_control(fh, T_before, T_after, T_bf=0.025, T_af=0.04,
                         fp=1000, fc=4000, fs_dec=16000):
+    """Return a DataFrame containing phase shift vs. pulse time for
+       experiment and control."""
     tps = fh['tp'][:] * 0.001 # ms to s
     tp_groups = fh['ds'][:]
     df = pd.DataFrame()
@@ -585,10 +622,33 @@ def workup_file(gr, out_file, T_before, T_after,
     return tp, out
 
 
-def expfall(x, df, tau, f0):
-    return df*(1-np.exp(-x/tau)) + f0
+def expfall(x, df, tau, f0): 
+    return np.where( x >= 0, df*(1-np.exp(-(x)/tau)), 0) + f0
+
+def expfallt(x, df, tau, f0, t0): 
+    return np.where( x >= t0, df*(1-np.exp(-(x-t0)/tau)), 0) + f0
+
+def fitexpfall(t, f, ti, tf, p0=None, fit_t0=False):
+    m = (t > ti) & (t <= tf)
+    popt, pcov = curve_fit(expfall, t[m], df[m], p0=p0)
+    if fit_t0:
+        popt2 = list(popt)
+        popt2.append(0)
+        return curve_fit(expfallt, t[m], df[m], p0=popt2)
+    else:
+        return popt, pcov
 
 
+def adiabatic2lockin(gr):
+    """Return a LockIn instance from an adiabatic phasekick formatted h5 file.
+    
+    Cantilever oscillator data is stored in 'cantilever-nm'."""
+    x = gr['cantilever-nm'][:]
+    dt = gr['dt [s]'].value
+    N = x.size
+    t0 = gr['t0 [s]'].value
+    t = np.arange(N)*dt + t0
+    return lockin.LockIn(t, x, 1./dt)
 
 @click.command()
 @click.argument('filename', type=click.Path())
@@ -599,27 +659,27 @@ def expfall(x, df, tau, f0):
 @click.argument('ti', type=float)
 @click.argument('tf', type=float)
 @click.argument('tiphase', type=float)
-def workup_adiabatic_avg(filename, fp, fc, tiplot, tfplot, ti, tf, tiphase):
+def workup_adiabatic_avg(filename, fp, fc, ti, tf, tiphase):
+    csv = filename.replace('.h5', '.csv')
     popts = []
     with h5py.File(filename, 'r') as fh:
         for i, gr in enumerate([gr for gr in fh.values() if isinstance(gr, h5py.Group)]):
-            x = gr['cantilever-nm'][:]
-            dt = gr['dt [s]'].value
-            N = x.size
-            t0 = gr['t0 [s]'].value
-            t = np.arange(N)*dt + t0
-            li = LockIn(t, x, 1./dt)
+            li = adiabatic2lockin(gr)
             li.lock2(fp=fp, fc=fc)
             li.phase(ti=tiphase, tf=0.)
-            m = (t > tiplot) & (t <= tfplot)
-            m2 = (t > ti) & (t <= tf)
-            popt, pcov = curve_fit(expfall, t[m2], li.df[m2])
+            popt, pcov = fitexpfall(li.t, li.df, ti, tf, 0)
             popts.append(popt)
 
     popts = np.array(popts)
+    df = pd.DataFrame(data=popts*np.array([1., 1000., 1]), columns=['df', 'tau', 'f0'])
+    df.to_csv(csv, index=False)  
 
     print(popts.mean(0))
     print(popts.std(0, ddof=1))
+    df.to_csv()
+
+
+
 
 
 
