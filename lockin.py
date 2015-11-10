@@ -630,11 +630,11 @@ def expfallt(x, df, tau, f0, t0):
 
 def fitexpfall(t, f, ti, tf, p0=None, fit_t0=False):
     m = (t > ti) & (t <= tf)
-    popt, pcov = curve_fit(expfall, t[m], df[m], p0=p0)
+    popt, pcov = curve_fit(expfall, t[m], f[m], p0=p0)
     if fit_t0:
         popt2 = list(popt)
         popt2.append(0)
-        return curve_fit(expfallt, t[m], df[m], p0=popt2)
+        return curve_fit(expfallt, t[m], f[m], p0=popt2)
     else:
         return popt, pcov
 
