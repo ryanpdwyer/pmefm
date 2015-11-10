@@ -665,8 +665,10 @@ def adiabatic2lockin(gr):
 def workup_adiabatic_avg(filename, fp, fc, ti, tf, tiphase):
     csv = filename.replace('.h5', '.csv')
     popts = []
+    index = []
     with h5py.File(filename, 'r') as fh:
-        for i, gr in enumerate([gr for gr in fh.values() if isinstance(gr, h5py.Group)]):
+        for gr in [gr for gr in fh.values() if isinstance(gr, h5py.Group)]:
+            index.append(int(gr.name))
             li = adiabatic2lockin(gr)
             li.lock2(fp=fp, fc=fc)
             li.phase(ti=tiphase, tf=0.)
@@ -674,7 +676,8 @@ def workup_adiabatic_avg(filename, fp, fc, ti, tf, tiphase):
             popts.append(popt)
 
     popts = np.array(popts)
-    df = pd.DataFrame(data=popts*np.array([1., 1000., 1]), columns=['df', 'tau', 'f0'])
+    df = pd.DataFrame(data=popts*np.array([1., 1000., 1]), index=index,
+                      columns=['df', 'tau', 'f0'])
     df.to_csv(csv, index=False)  
 
     print(popts.mean(0))
