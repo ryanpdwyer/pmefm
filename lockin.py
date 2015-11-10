@@ -668,7 +668,7 @@ def workup_adiabatic_avg(filename, fp, fc, ti, tf, tiphase):
     index = []
     with h5py.File(filename, 'r') as fh:
         for gr in [gr for gr in fh.values() if isinstance(gr, h5py.Group)]:
-            index.append(int(gr.name))
+            index.append(int(gr.name.split('/')[-1]))
             li = adiabatic2lockin(gr)
             li.lock2(fp=fp, fc=fc)
             li.phase(ti=tiphase, tf=0.)
