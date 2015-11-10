@@ -648,7 +648,7 @@ def adiabatic2lockin(gr):
     N = x.size
     t0 = gr['t0 [s]'].value
     t = np.arange(N)*dt + t0
-    return lockin.LockIn(t, x, 1./dt)
+    return LockIn(t, x, 1./dt)
 
 @click.command()
 @click.argument('filename', type=click.Path())
