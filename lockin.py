@@ -654,8 +654,6 @@ def adiabatic2lockin(gr):
 @click.argument('filename', type=click.Path())
 @click.argument('fp', type=float)
 @click.argument('fc', type=float)
-@click.argument('tiplot', type=float)
-@click.argument('tfplot', type=float)
 @click.argument('ti', type=float)
 @click.argument('tf', type=float)
 @click.argument('tiphase', type=float)
