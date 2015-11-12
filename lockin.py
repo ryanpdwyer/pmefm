@@ -139,6 +139,9 @@ def lock2(f0, fp, fc, fs, coeff_ratio=8, coeffs=None,
     return b
 
 
+
+
+
 class LockIn(object):
     def __init__(self, t, x, fs):
         self.t = t
@@ -188,7 +191,8 @@ or provide more data.""".format(coeffs, t.size))
         self.phi = np.angle(self.z)
 
     def lock2(self, f0=None, fp_ratio=0.1, fc_ratio=0.4, coeff_ratio=8,
-              fp=None, fc=None, coeffs=None, window='blackman'):
+              fp=None, fc=None, coeffs=None, window='blackman',
+              print_response=True):
         t = self.t
         fs = self.fs
 
@@ -201,7 +205,8 @@ or provide more data.""".format(coeffs, t.size))
         if fc is None:
             fc = fc_ratio * f0
 
-        self.fir = b = lock2(f0, fp, fc, fs, coeff_ratio, coeffs, window)
+        self.fir = b = lock2(f0, fp, fc, fs, coeff_ratio, coeffs, window,
+                             print_response=print_response)
 
         if coeffs > self.x.size:
             raise ValueError(
@@ -221,6 +226,35 @@ or provide more data.""".format(coeffs, t.size))
 
         self.A = abs(self.z)
         self.phi = np.angle(self.z)
+
+    def lock_butter(self, N, f3dB, t_exclude=0, f0=None, print_response=True):
+        t = self.t
+        fs = self.fs
+        nyq = fs / 2.
+        f3dB = f3dB / nyq 
+
+        self.iir = ba = signal.iirfilter(N, f3dB, btype='low')
+
+        if f0 is None:
+            self.f0 = f0 = self.f0_est
+
+
+        self.z = z = signal.lfilter(self.iir[0], self.iir[1], self.z)
+        # TODO: Fix accounting on final / initial point
+        m = self.m
+        self.m = self.m & (t >= (t[m][0] + t_exclude)) & (t < (t[m][-1] - t_exclude))
+
+        self.A = abs(self.z)
+        self.phi = np.angle(self.z)
+
+        if print_response:
+            w, rep = signal.freqz(self.iir[0], self.iir[1],
+                        worN=np.pi*np.array([0., f3dB/2, f3dB,
+                                             0.5*f0/nyq, f0/nyq, 1.]))
+            print("Response:")
+            _print_magnitude_data(w, rep, fs)
+
+
 
     def autophase(self, ti=None, tf=None, unwrap=False, x0=[0., 0.]):
         t = self.t
@@ -482,7 +516,7 @@ def workup_gr(ds, T_before, T_after, T_bf=0.03, T_af=0.06, fp=1000, fc=4000,
     return lockstate
 
 def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
-                        fp, fc, fs_dec):
+                        fp, fc, fs_dec, T_before_offset=0.):
     """Workup an individual adiabatic phasekick dataset, starting from the raw
     cantilever vs. time data.
 
@@ -524,7 +558,7 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
     li = LockIn(t, y, fs)
     li.lock2(fp=fp, fc=fc)
     tedge = li.fir.size * dt / 2
-    li.phase(ti=-T_bf, tf=0)
+    li.phase(ti=-T_bf+T_before_offset, tf=T_before_offset)
     f1 = li.f0corr
     phi0 = -li.phi[0]
     li.phase(ti=tp, tf=(tp+T_af))
@@ -559,12 +593,12 @@ def plot_phasekick_control(df):
     return fig, ax
 
 def delta_phi_group(subgr, tp, T_before, T_after, T_bf=0.025, T_af=0.04,
-                        fp=1000, fc=4000, fs_dec=16000):
+                        fp=1000, fc=4000, fs_dec=16000, T_before_offset=0.):
     y = subgr['cantilever-nm'][:]
     dt = subgr['dt [s]'].value
     t0 = subgr['t0 [s]'].value
     lockstate = adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
-                fp, fc, fs_dec)
+                fp, fc, fs_dec, T_before_offset)
     return lockstate.delta_phi, lockstate
 
 def workup_adiabatic_w_control(fh, T_before, T_after, T_bf=0.025, T_af=0.04,
@@ -644,7 +678,7 @@ def fitexpfall(t, f, ti, tf, p0=None, fit_t0=False):
         return popt, pcov
 
 
-def adiabatic2lockin(gr):
+def adiabatic2lockin(gr,):
     """Return a LockIn instance from an adiabatic phasekick formatted h5 file.
     
     Cantilever oscillator data is stored in 'cantilever-nm'."""
