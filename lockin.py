@@ -516,7 +516,7 @@ def workup_gr(ds, T_before, T_after, T_bf=0.03, T_af=0.06, fp=1000, fc=4000,
     return lockstate
 
 def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
-                        fp, fc, fs_dec, T_before_offset=0.):
+                        fp, fc, fs_dec, T_before_offset=0., print_response=True):
     """Workup an individual adiabatic phasekick dataset, starting from the raw
     cantilever vs. time data.
 
@@ -556,7 +556,7 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
     tp = tp # ms to s
     t = np.arange(y.size) * dt + t0
     li = LockIn(t, y, fs)
-    li.lock2(fp=fp, fc=fc)
+    li.lock2(fp=fp, fc=fc, print_response=print_response)
     tedge = li.fir.size * dt / 2
     li.phase(ti=-T_bf+T_before_offset, tf=T_before_offset)
     f1 = li.f0corr
@@ -593,12 +593,12 @@ def plot_phasekick_control(df):
     return fig, ax
 
 def delta_phi_group(subgr, tp, T_before, T_after, T_bf=0.025, T_af=0.04,
-                        fp=1000, fc=4000, fs_dec=16000, T_before_offset=0.):
+                        fp=1000, fc=4000, fs_dec=16000, T_before_offset=0., print_response=True):
     y = subgr['cantilever-nm'][:]
     dt = subgr['dt [s]'].value
     t0 = subgr['t0 [s]'].value
     lockstate = adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
-                fp, fc, fs_dec, T_before_offset)
+                fp, fc, fs_dec, T_before_offset, print_response)
     return lockstate.delta_phi, lockstate
 
 def workup_adiabatic_w_control(fh, T_before, T_after, T_bf=0.025, T_af=0.04,
@@ -729,13 +729,19 @@ def workup_adiabatic_avg(filename, fp, fc, ti, tf, tiphase):
 @click.argument('fc', type=float)
 @click.argument('t_before', type=float)
 @click.argument('t_after', type=float)
-@click.option('--t_bf', type=float, default=0.025)
-@click.option('--t_af', type=float, default=0.04)
-def adiabatic_phasekick_cli(filename, fp, fc, t_before, t_after, t_bf, t_af):
-    pdf = filename.replace('.h5', '.pdf')
-    csv = filename.replace('.h5', '.csv')
+@click.option('--tbf', type=float, default=0.001)
+@click.option('--taf', type=float, default=0.001)
+@click.option('--output', '-o', type=str, default=None)
+def adiabatic_phasekick_cli(filename, fp, fc, t_before, t_after, tbf, taf, output=None):
+    if output is None:
+        pdf = filename.replace('.h5', '.pdf')
+        csv = filename.replace('.h5', '.csv')
+    else:
+        pdf = output+'.pdf'
+        csv = output+'.csv'
+
     with h5py.File(filename, 'r') as fh:
-        df = workup_adiabatic_w_control(fh, t_before, t_after, t_bf, t_af,
+        df = workup_adiabatic_w_control(fh, t_before, t_after, tbf, taf,
                         fp, fc, fs_dec=4*fc)
 
 
