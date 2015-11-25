@@ -87,7 +87,7 @@ def _print_magnitude_data(w, rep, fs):
     df['f'] = w /(2*np.pi) * fs
     df['mag'] = abs(rep)
     df['dB'] = 20 * np.log10(df['mag'].values)
-    df.sort(columns="f", inplace=True)
+    df.sort_values(by="f", inplace=True)
     print(df.to_string(index=False, float_format="{:.3f}".format))
     return df
 
