@@ -12,6 +12,7 @@ import pandas as pd
 import sigutils
 import click
 import h5py
+import sys
 import pathlib
 from scipy.optimize import curve_fit
 from scipy.signal.signaltools import _centered
@@ -137,9 +138,6 @@ def lock2(f0, fp, fc, fs, coeff_ratio=8, coeffs=None,
         _print_magnitude_data(w, rep, fs)
 
     return b
-
-
-
 
 
 class LockIn(object):
@@ -479,42 +477,6 @@ class FIRStateLockVarF(object):
         return self.t0_dec + np.arange(self.z_out.size)/self.fs * self.dec
 
 
-
-
-def workup_gr(ds, T_before, T_after, T_bf=0.03, T_af=0.06, fp=1000, fc=4000,
-              fs_dec=16000, t0=0.05):
-    """Lockin workup of the data in h5py dataset ds.
-    This assumes that ds contains attributes dt, pulse time, which enable us to
-    perform the workup."""
-    dt = ds.attrs['dt']
-    tp = ds.attrs['pulse time']
-    fs = 1. / dt
-    y = ds[:]
-    x = np.arange(y.size, dtype=np.float64)*dt
-    li = LockIn(x, y, fs)
-    li.lock2(fp=fp, fc=fc)
-    tedge = li.fir.size * dt / 2
-    li.phase(ti=t0-T_bf-tedge, tf=t0-tedge)
-    f1 = li.f0corr
-    phi0 = -li.phi[0]
-    li.phase(ti=(t0+tp+tedge), tf=(t0+tp+T_af+tedge))
-    f2 = li.f0corr
-    dec = int(np.floor(fs / fs_dec))
-    def f_var(t):
-        return np.where(t > t0 + tp, f2, f1)
-    lockstate = FIRStateLockVarF(li.fir, dec, f_var, phi0, fs=fs)
-    lockstate.filt(y)
-    lockstate.dphi = np.unwrap(np.angle(lockstate.z_out))
-    lockstate.df = np.gradient(lockstate.dphi) * (
-            fs / (dec * 2*np.pi))
-    
-    lockstate.tp = tp
-    lockstate.t = t = lockstate.get_t()
-    lockstate.delta_phi = (np.mean(lockstate.dphi[(t >= (t0 + tp)) & (t < t0 + tp + T_after)]) - 
-                            np.mean(lockstate.dphi[(t >= (t0 - T_before)) & (t < t0)])
-                           )
-    return lockstate
-
 def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
                         fp, fc, fs_dec, T_before_offset=0., print_response=True):
     """Workup an individual adiabatic phasekick dataset, starting from the raw
@@ -553,7 +515,6 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
 
     """
     fs = 1. / dt
-    tp = tp # ms to s
     t = np.arange(y.size) * dt + t0
     li = LockIn(t, y, fs)
     li.lock2(fp=fp, fc=fc, print_response=print_response)
@@ -584,6 +545,18 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
     return lockstate
 
 
+def workup_gr(ds, T_before, T_after, T_bf=0.001, T_af=0.002, fp=1000, fc=4000,
+              fs_dec=16000, t0=0.05):
+    """Lockin workup of the data in h5py dataset ds (Sarah / John h5 file).
+    This assumes that ds contains attributes dt, pulse time, which enable us to
+    perform the workup."""
+    dt = ds.attrs['dt']
+    tp = ds.attrs['pulse time']
+    y = ds[:]
+    return adiabatic_phasekick(y, dt, tp, -t0, T_before, T_after, T_bf, T_af,
+                        fp, fc, fs_dec, T_before_offset=0., print_response=True)
+
+
 def plot_phasekick_control(df):
     fig, ax = plt.subplots()
     ax.plot(df['tp [s]']*1e3, df['control dphi [cyc]'], 'bo')
@@ -593,7 +566,7 @@ def plot_phasekick_control(df):
     return fig, ax
 
 def delta_phi_group(subgr, tp, T_before, T_after, T_bf=0.025, T_af=0.04,
-                        fp=1000, fc=4000, fs_dec=16000, T_before_offset=0., print_response=True):
+                    fp=1000, fc=4000, fs_dec=16000, T_before_offset=0., print_response=True):
     y = subgr['cantilever-nm'][:]
     dt = subgr['dt [s]'].value
     t0 = subgr['t0 [s]'].value
@@ -609,12 +582,16 @@ def workup_adiabatic_w_control(fh, T_before, T_after, T_bf=0.025, T_af=0.04,
     tp_groups = fh['ds'][:]
     df = pd.DataFrame()
     df['tp [s]'] = tps
+    i = 0
     for control_or_data in ('control', 'data'):
         delta_phi = []
         for (tp_group, tp) in zip(tp_groups, tps):
+            print_response = i == 0
             dphi, _ = delta_phi_group(
                 fh[control_or_data][tp_group], tp, T_before, T_after,
-                T_bf, T_af, fp, fc, fs_dec)
+                T_bf, T_af, fp, fc, fs_dec, print_response=print_response)
+            i += 1
+            sys.stdout.write('.')
             delta_phi.append(dphi/(2*np.pi))
         df[control_or_data+' dphi [cyc]'] = delta_phi
 
@@ -622,7 +599,7 @@ def workup_adiabatic_w_control(fh, T_before, T_after, T_bf=0.025, T_af=0.04,
 
 
 def workup_file(gr, out_file, T_before, T_after,
-                T_bf=0.03, T_af=0.04, fp=1000, fc=4000, fs_dec=16000, t0=0.05,
+                T_bf=0.002, T_af=0.002, fp=1000, fc=4000, fs_dec=16000, t0=0.05,
                 overwrite=False, show_progress=True):
     out = []
     tp = []
@@ -638,22 +615,32 @@ def workup_file(gr, out_file, T_before, T_after,
 
     return tp, out
 
-def workup_file(gr, out_file, T_before, T_after,
-                T_bf=0.03, T_af=0.06, fp=1000, fc=4000, fs_dec=16000, t0=0.05,
-                overwrite=False, show_progress=True):
-    out = []
-    tp = []
-    N = len(gr.items())
-    m = int(N//10)
-    i = 1
-    for ds_name, ds in gr.items():
-        out.append(workup_gr(ds, T_before, T_after, T_bf, T_af, fp, fc, fs_dec, t0))
-        tp.append(ds.attrs['pulse time'])
-        if show_progress and i % m == 0:
-            print("{i}/{N} complete")
-        i += 1
 
-    return tp, out
+def workup_adiabatic_realtime(fh, fp, fc, ti, tf, tiphase, p0=None,
+                              show_progress=True):
+    popts = []
+    index = []
+    lis = []
+    for i, gr in enumerate([gr for gr in fh.values() if isinstance(gr, h5py.Group)]):
+        index.append(int(gr.name.split('/')[-1]))
+        li = adiabatic2lockin(gr)
+        print_response = i == 0
+        li.lock2(fp=fp, fc=fc, print_response=print_response)
+        li.phase(ti=tiphase, tf=0.)
+        lis.append(li)
+        if p0 is None:
+            popt, pcov = fitexpfall(li.t, li.df, ti, tf)
+        else:
+            popt, pcov = fitexpfall(li.t, li.df, ti, tf, p0=p0)
+        popts.append(popt)
+        sys.stdout.write('.')
+
+    popts = np.array(popts)
+    df = pd.DataFrame(data=popts*np.array([1., 1000., 1]), index=index,
+                      columns=['df', 'tau', 'f0'])
+    f0 = np.array([li.f0corr for li in lis])
+    df['f0'] = df['f0'] + f0
+    return df, lis
 
 
 def expfall(x, df, tau, f0): 
@@ -717,9 +704,6 @@ def workup_adiabatic_avg(filename, fp, fc, ti, tf, tiphase):
     print(popts.mean(0))
     print(popts.std(0, ddof=1))
     df.to_csv()
-
-
-
 
 
 
