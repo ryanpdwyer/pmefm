@@ -18,11 +18,20 @@ import sigutils
 import click
 import h5py
 import sys
+import os
+import io
 import pathlib
 from scipy import interpolate
 from scipy.optimize import curve_fit
 from scipy.signal.signaltools import _centered
 import lockin
+
+import docutils.core
+import base64
+import bs4
+
+def phase_step(t, tau, df):
+    return df*t + df*tau*(np.exp(-t/tau)-1)
 
 def offset_cos(phi, A, phi0, b):
     return A*np.cos(phi + phi0) + b
@@ -119,13 +128,35 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
     df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
                             - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
 
+    control = df.xs('control')
+    data = df.xs('data')
+
+
+    popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
+    popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
+    
     # Extra informationdd
     extras = {'popt_phi': popt_phi,
          'pcov_phi': pcov_phi,
+         'pdiag_phi': np.diagonal(pcov_phi)**0.5,
          'popt_A': popt_A,
          'pcov_A': pcov_A,
+         'pdiag_A': np.diagonal(pcov_A)**0.5,
+         'popt_phase_corr': popt_phase_corr,
+         'pcov_phase_corr': pcov_phase_corr,
+         'pdiag_phase_corr': np.diagonal(pcov_phase_corr)**0.5,
+         'popt_phase': popt_phase,
+         'pcov_phase': pcov_phase,
+         'pdiag_phase': np.diagonal(pcov_phase)**0.5,
+         'T_before': T_before,
+         'T_after': T_after,
+         'T_bf': T_bf,
+         'T_af': T_af,
+         'fp': fp,
+         'fc': fc,
+         'fs_dec': fs_dec,
          'lis': lis,
-          'locks': locks}
+         'locks': locks}
 
     # Do a fit to the corrected phase data here.
 
@@ -136,7 +167,7 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
 # Plot df0 vs t
 # Plot phasekick, with fit (save fit parameters)
 
-def plot_zero_time(extras, figax=None, rcParams={}):
+def plot_zero_time(extras, figax=None, rcParams={}, filename=None):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
@@ -146,14 +177,18 @@ def plot_zero_time(extras, figax=None, rcParams={}):
     data = extras['locks']['data']
     for li in data:
         m = (li.t >= -20e-6) & (li.t < 20e-6)
-        ax.plot(li.t[m]*1e6, li.x[m])
+        ax.plot(li.t[m]*1e6, li.x[m], 'k', alpha=0.5)
 
     ax.set_xlabel(u"Time [µs]")
     ax.set_ylabel(u"x [nm]")
-    ax.set_xlim(-20e-6, 20e-6)
+    ax.set_xlim(-20, 20)
+
+    if filename is not None:
+        fig.savefig(filename, bbox_inches='tight')
+
     return fig, ax
 
-def plot_amplitudes(extras, figax=None, rcParams={}):
+def plot_amplitudes(extras, figax=None, rcParams={}, filename=None):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
@@ -161,19 +196,22 @@ def plot_amplitudes(extras, figax=None, rcParams={}):
         fig, ax = figax
 
     for li in extras['lis']['control']:
-        ax.plot(li.get_t()[::4]*1e3, abs(li.z_out)[::4], 'green', alpha=0.5)
+        ax.plot(li.get_t()*1e3, abs(li.z_out), 'green', alpha=0.5)
     for li in extras['lis']['data']:
-        t = li.get_t()
-        ax.plot(t[::4]*1e3, abs(li.z_out)[::4], 'b', alpha=0.5)
+        t = li.get_t()*1e3
+        ax.plot(t, abs(li.z_out), 'b', alpha=0.5)
 
     ax.set_xlabel(u"Time [ms]")
     ax.set_ylabel(u"Amplitude [nm]")
     ax.set_xlim(t[0], t[-1])
     ax.grid()
+
+    if filename is not None:
+        fig.savefig(filename, bbox_inches='tight')
     return fig, ax
 
 
-def plot_df0vs_t(df, figax=None, rcParams={}):
+def plot_df0vs_t(df, figax=None, rcParams={}, filename=None):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
@@ -186,13 +224,43 @@ def plot_df0vs_t(df, figax=None, rcParams={}):
     ax.plot(data['relative time [s]'], data['df_dV [Hz]'], 'bo')
     ax.plot(control['relative time [s]'], control['df_dV [Hz]'], 'go')
 
-    ax.set_xlim('Relative time [s]')
-    ax.set_ylim('Frequency shift [Hz]')
-
+    ax.set_xlabel('Relative time [s]')
+    ax.set_ylabel('Frequency shift [Hz]')
+    if filename is not None:
+        fig.savefig(filename, bbox_inches='tight')
     return fig, ax
 
+def plot_dA_dphi_vs_t(df, extras, figax=None, rcParams={}, filename=None):
+    if figax is None:
+        with mpl.rc_context(rcParams):
+            fig, (ax1, ax2) = plt.subplots(nrows=2, sharex=True)
+    else:
+        fig, (ax1, ax2) = figax
 
-def plot_phasekick(df, extras, figax=None, rcParams={}):
+    df_sorted = df.sort_values('phi_at_tp [rad]')
+
+    control = df_sorted.loc['control']
+    f0 = control['f0 [Hz]'].median()
+
+    td = control['phi_at_tp [rad]']/(2*np.pi*f0) * 1e6
+    ax1.plot(td, control['dA [nm]'], 'b.')
+    ax1.plot(td, offset_cos(control['phi_at_tp [rad]'], *extras['popt_A']))
+
+    ax2.plot(td, control['dphi [cyc]']*1e3, 'b.')
+    ax2.plot(td, offset_cos(control['phi_at_tp [rad]'], *extras['popt_phi'])*1e3)
+
+    ax1.grid()
+    ax2.grid()
+    ax1.set_xlabel(r'$\tau_\mathrm{d} \: [\mu\mathrm{s}]$')
+    ax1.set_ylabel(r'$\Delta A \: [\mathrm{nm}]$')
+    ax2.set_ylabel(r'$\Delta \phi \: [\mathrm{mcyc.}]$')
+
+    if filename is not None:
+        fig.savefig(filename, bbox_inches='tight')
+    return fig, (ax1, ax2)
+
+
+def plot_phasekick(df, figax=None, rcParams={}, filename=None):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
@@ -202,7 +270,7 @@ def plot_phasekick(df, extras, figax=None, rcParams={}):
     data = df.loc['data']
     control = df.loc['control']
 
-    if data['dphi_corrected [cyc]'].max() > 0.15:
+    if abs(data['dphi [cyc]']).max() > 0.15:
         units = 'cyc'
         scale = 1
     else:
@@ -216,9 +284,12 @@ def plot_phasekick(df, extras, figax=None, rcParams={}):
     ax.set_xlabel('Pulse time [ms]')
     ax.set_ylabel('Phase shift [{}.]'.format(units))
 
+    if filename is not None:
+        fig.savefig(filename, bbox_inches='tight')
+
     return fig, ax
 
-def plot_phasekick_corrected(df, extras, figax=None, rcParams={}):
+def plot_phasekick_corrected(df, figax=None, rcParams={}, filename=None):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
@@ -228,7 +299,7 @@ def plot_phasekick_corrected(df, extras, figax=None, rcParams={}):
     data = df.loc['data']
     control = df.loc['control']
 
-    if data['dphi_corrected [cyc]'].max() > 0.15:
+    if abs(data['dphi_corrected [cyc]']).max() > 0.15:
         units = 'cyc'
         scale = 1
     else:
@@ -241,9 +312,187 @@ def plot_phasekick_corrected(df, extras, figax=None, rcParams={}):
 
     ax.set_xlabel('Pulse time [ms]')
     ax.set_ylabel('Phase shift [{}.]'.format(units))
-
+    if filename is not None:
+        fig.savefig(filename, bbox_inches='tight')
     return fig, ax
 
 
+# Create a report
+def file_extension(filename):
+    """Return the file extension for a given filename. For example,
+
+    Input               Output
+    -------------       ---------
+    data.csv            csv
+    data.tar.gz         gz
+    .vimrc              (empty string)"""
+
+    return os.path.splitext(filename)[1][1:]
+
+def img2uri(html_text):
+    """Convert any relative reference img tags in html_input to inline data uri.
+    Return the transformed html, in utf-8 format."""
+
+    soup = bs4.BeautifulSoup(html_text)
+
+    image_tags = soup.find_all('img')
+
+    for image_tag in image_tags:
+        image_path = image_tag.attrs['src']
+        if 'http' not in image_path:
+            base64_text = base64.b64encode(open(image_path, 'rb').read())
+            ext = file_extension(image_path)
+            
+            image_tag.attrs['src'] = (
+                "data:image/{ext};base64,{base64_text}".format(
+                    ext=ext, base64_text=base64_text)
+                )
+
+    return soup.prettify("utf-8")
 
 
+
+ReST_temp = u"""
+Phasekick report
+================
+
+::
+
+        File: {filename}
+    T_before: {T_before:.3e}
+     T_after: {T_after:.3e}
+        T_bf: {T_bf:.3e}
+        T_af: {T_af:.3e}
+          fp: {fp}
+          fc: {fc}
+      fs_dec: {fs_dec}
+
+
+Best fit parameters
+-------------------
+
+::
+
+     τ = {popt_phase[0]:.3e} ± {pdiag_phase[0]:.2e} s
+    Δf = {popt_phase[1]:.3e} ± {pdiag_phase[1]:.2e} Hz
+
+
+.. image:: {outf_phasekick}
+
+Corrected best fit parameters
+-----------------------------
+
+::
+
+     τ = {popt_phase_corr[0]:.3e} ± {pdiag_phase_corr[0]:.2e} s
+    Δf = {popt_phase_corr[1]:.3e} ± {pdiag_phase_corr[1]:.2e} Hz
+
+
+
+.. image:: {outf_phasekick_corr}
+
+Amplitude phase response 
+------------------------
+
+.. image:: {outf_amp_phase_resp}
+
+
+Frequency shift
+---------------
+
+.. image:: {outf_frequency_shift}
+
+
+Amplitudes
+----------
+
+.. image:: {outf_amplitudes}
+
+
+Zero time
+---------
+
+.. image:: {outf_zero_time}
+
+"""
+
+def report_adiabatic_control_phase_corr(filename,
+    T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename=None, ext='html'):
+    if basename is None:
+        basename = os.path.splitext(filename)[0]
+    with h5py.File(filename, 'r') as fh:
+        df, extras = workup_adiabatic_w_control_correct_phase(fh,
+            T_before, T_after, T_bf, T_af, fp, fc, fs_dec)
+
+        d = {'outf_zero_time': basename+'-zerotime.png',
+         'outf_phasekick': basename+'-phasekick-uncorrected.png',
+         'outf_phasekick_corr': basename+'-phasekick-corrected.png',
+         'outf_amplitudes': basename+'-amplitude.png',
+         'outf_frequency_shift': basename+'-frequency-shift.png',
+         'outf_amp_phase_resp': basename+'-dA-dphi.png',
+         'basename': basename,
+         'filename': filename,
+         'T_before': T_before,
+         'T_after': T_after,
+         'T_bf': T_bf,
+         'T_af': T_af,
+         'fp': fp,
+         'fc': fc,
+         'fs_dec': fs_dec,}
+
+        d.update(extras)
+
+        plot_zero_time(extras, filename=d['outf_zero_time'])
+        plot_phasekick(df, filename=d['outf_phasekick'])
+        plot_phasekick_corrected(df,
+            filename=d['outf_phasekick_corr'])
+        plot_amplitudes(extras, filename=d['outf_amplitudes'])
+        plot_df0vs_t(df, filename=d['outf_frequency_shift'])
+        plot_dA_dphi_vs_t(df, extras, filename=d['outf_amp_phase_resp'])
+
+
+    ReST = ReST_temp.format(**d)
+    image_dependent_html = docutils.core.publish_string(ReST, writer_name='html')
+    self_contained_html = unicode(img2uri(image_dependent_html), 'utf8')
+
+
+
+    # io module instead of built-in open because it allows specifying
+    # encoding. See http://stackoverflow.com/a/22288895/2823213
+    with io.open(basename+'.html', 'w', encoding='utf8') as f:
+        f.write(self_contained_html)
+
+    df.to_csv(basename+'.csv')
+
+    for fname in [fname for key, fname in d.items() if 'outf' in key]:
+        try:
+            os.remove(fname)
+        except:
+            pass
+
+
+
+@click.command()
+@click.argument('filename', type=click.Path())
+@click.argument('fp', type=float)
+@click.argument('fc', type=float)
+@click.argument('t_before', type=float)
+@click.argument('t_after', type=float)
+@click.option('--tbf', type=float, default=0.001)
+@click.option('--taf', type=float, default=0.001)
+@click.option('--basename', type=str, default=None)
+def report_adiabatic_control_phase_corr_cil(filename,
+    T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename, ext='html'):
+    
+    report_adiabatic_control_phase_corr(filename,
+    T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename, ext='html')
+
+
+
+
+
+
+
+
+
+    

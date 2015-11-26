@@ -33,6 +33,7 @@ setup(
         firlockstate=lockin:firlockstate
         adiabatic_phasekick=lockin:adiabatic_phasekick_cli
         workup_adiabatic_avg=lockin:workup_adiabatic_avg
+        adiabatic_report=phasekick:report_adiabatic_control_phase_corr_cil
     ''',
     keywords='myscipkg4',
     classifiers=[
