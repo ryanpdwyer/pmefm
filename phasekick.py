@@ -417,9 +417,13 @@ Zero time
 """
 
 def report_adiabatic_control_phase_corr(filename,
-    T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename=None, ext='html'):
+    T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename=None, outdir=None):
     if basename is None:
         basename = os.path.splitext(filename)[0]
+
+    if outdir is not None:
+        basename = os.path.join(outdir, os.path.basename(basename))
+
     with h5py.File(filename, 'r') as fh:
         df, extras = workup_adiabatic_w_control_correct_phase(fh,
             T_before, T_after, T_bf, T_af, fp, fc, fs_dec)
@@ -481,11 +485,13 @@ def report_adiabatic_control_phase_corr(filename,
 @click.option('--tbf', type=float, default=0.001)
 @click.option('--taf', type=float, default=0.001)
 @click.option('--basename', type=str, default=None)
+@click.option('--outdir', type=str, default=None)
 def report_adiabatic_control_phase_corr_cil(filename,
-    T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename, ext='html'):
+    t_before, t_after, tbf, taf, fp, fc, basename, outdir):
+    fs_dec = fc * 4
     
     report_adiabatic_control_phase_corr(filename,
-    T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename, ext='html')
+    t_before, t_after, tbf, taf, fp, fc, fs_dec, basename, outdir)
 
 
 
