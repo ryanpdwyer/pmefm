@@ -30,13 +30,104 @@ import docutils.core
 import base64
 import bs4
 
+
+def masklh(x, l=None, r=None):
+    if l is None:
+        return (x < r)
+    elif r is None:
+        return (x >= l)
+    else:
+        return (x >= l) & (x < r)
+
+
+def prnDict(aDict, br='\n', html=0,
+            keyAlign='l',   sortKey=0,
+            keyPrefix='',   keySuffix='',
+            valuePrefix='', valueSuffix='',
+            leftMargin=4,   indent=1 ):
+    '''
+return a string representive of aDict in the following format:
+    {
+     key1: value1,
+     key2: value2,
+     ...
+     }
+
+Spaces will be added to the keys to make them have same width.
+
+sortKey: set to 1 if want keys sorted;
+keyAlign: either 'l' or 'r', for left, right align, respectively.
+keyPrefix, keySuffix, valuePrefix, valueSuffix: The prefix and
+   suffix to wrap the keys or values. Good for formatting them
+   for html document(for example, keyPrefix='<b>', keySuffix='</b>'). 
+   Note: The keys will be padded with spaces to have them
+         equally-wide. The pre- and suffix will be added OUTSIDE
+         the entire width.
+html: if set to 1, all spaces will be replaced with '&nbsp;', and
+      the entire output will be wrapped with '<code>' and '</code>'.
+br: determine the carriage return. If html, it is suggested to set
+    br to '<br>'. If you want the html source code eazy to read,
+    set br to '<br>\n'
+
+version: 04b52
+author : Runsun Pan
+require: odict() # an ordered dict, if you want the keys sorted.
+         Dave Benjamin 
+         http://aspn.activestate.com/ASPN/Cookbook/Python/Recipe/161403
+    '''
+   
+    if aDict:
+
+        #------------------------------ sort key
+        if sortKey:
+            dic = aDict.copy()
+            keys = dic.keys()
+            keys.sort()
+            aDict = odict()
+            for k in keys:
+                aDict[k] = dic[k]
+            
+        #------------------- wrap keys with ' ' (quotes) if str
+        tmp = ['{']
+        ks = [type(x)==str and "'%s'"%x or x for x in aDict.keys()]
+
+        #------------------- wrap values with ' ' (quotes) if str
+        vs = [type(x)==str and "'%s'"%x or x for x in aDict.values()] 
+
+        maxKeyLen = max([len(str(x)) for x in ks])
+
+        for i in range(len(ks)):
+
+            #-------------------------- Adjust key width
+            k = {1            : str(ks[i]).ljust(maxKeyLen),
+                 keyAlign=='r': str(ks[i]).rjust(maxKeyLen) }[1]
+            
+            v = vs[i]        
+            tmp.append(' '* indent+ '%s%s%s:%s%s%s,' %(
+                        keyPrefix, k, keySuffix,
+                        valuePrefix,v,valueSuffix))
+
+        tmp[-1] = tmp[-1][:-1] # remove the ',' in the last item
+        tmp.append('}')
+
+        if leftMargin:
+          tmp = [ ' '*leftMargin + x for x in tmp ]
+          
+        if html:
+            return '<code>%s</code>' %br.join(tmp).replace(' ','&nbsp;')
+        else:
+            return br.join(tmp)     
+    else:
+        return '{}'
+
+
 def phase_step(t, tau, df):
     return df*t + df*tau*(np.exp(-t/tau)-1)
 
 def offset_cos(phi, A, phi0, b):
     return A*np.cos(phi + phi0) + b
 
-def measure_dA_dphi(lock, li, tp):
+def measure_dA_dphi(lock, li, tp, t_fit=2e-3):
     """Correct for impulsive phase shift at end of pulse time.
 
     Note: This will currently work poorly for long pulse times.
@@ -57,14 +148,22 @@ def measure_dA_dphi(lock, li, tp):
     
     phi0 = np.arctan2(-x2, x0)
     
-    ml = (li.t >= (tp - 10e-3)) & (li.t < (tp - 1e-3))
-    mr = (li.t >= (tp + 1e-3)) & (li.t < (tp + 10e-3))
-    A = abs(li.z_out)
-    mbl = np.polyfit(li.t[ml], A[ml], 1)
-    mbr = np.polyfit(li.t[mr], A[mr], 1)
-    dA = np.polyval(mbr, tp) - np.polyval(mbl, tp)
+    ml = masklh(li.t, tp-t_fit, tp)
+    mr = masklh(li.t, tp, tp + t_fit)
     
-    return phi0, dA
+    A = abs(li.z_out)
+    phi = np.unwrap(np.angle(li.z_out))/(2*np.pi)
+
+    mbAl = np.polyfit(li.t[ml], A[ml], 1)
+    mbAr = np.polyfit(li.t[mr], A[mr], 1)
+
+    mb_phi_l = np.polyfit(li.t[ml], phi[ml], 1)
+    mb_phi_r = np.polyfit(li.t[mr], phi[mr], 1)
+
+    dA = np.polyval(mbAr, tp) - np.polyval(mbAl, tp)
+    dphi = np.polyval(mb_phi_r, tp) - np.polyval(mb_phi_l, tp)
+    
+    return phi0, dA, dphi
 
 # Interface layers:
 # -Raw hdf5 file to object / structure.
@@ -101,11 +200,12 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
                 gr, tp, T_before, T_after,
                 T_bf, T_af, fp, fc, fs_dec, print_response=print_response)
 
-            phi_at_tp, dA = measure_dA_dphi(lock, li, tp)
+            phi_at_tp, dA, dphi_tp_end = measure_dA_dphi(lock, li, tp)
             lis[control_or_data].append(li)
             locks[control_or_data].append(lock)
             i += 1
             sys.stdout.write('.')
+            sys.stdout.flush()
 
             curr_index = (control_or_data, tp_group)
             df.loc[curr_index, 'tp'] = tp
@@ -113,15 +213,18 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
             df.loc[curr_index, 'f0 [Hz]'] = f0_V0
             df.loc[curr_index, 'df_dV [Hz]'] = f0_V1 - f0_V0
             df.loc[curr_index, 'dA [nm]'] = dA
+            df.loc[curr_index, 'dphi_tp_end [cyc]'] = dphi_tp_end
             df.loc[curr_index, 'phi_at_tp [rad]'] = phi_at_tp
             df.loc[curr_index, 'relative time [s]'] = gr['relative time [s]'].value
+
+    sys.stdout.write('\n')
 
     df.sort_index(inplace=True)
 
     control = df.xs('control')
     data = df.xs('data')
     popt_phi, pcov_phi = optimize.curve_fit(offset_cos,
-        control['phi_at_tp [rad]'], control['dphi [cyc]'])
+        control['phi_at_tp [rad]'], control['dphi_tp_end [cyc]'])
     popt_A, pcov_A = optimize.curve_fit(offset_cos,
         control['phi_at_tp [rad]'], control['dA [nm]'])
 
@@ -246,7 +349,7 @@ def plot_dA_dphi_vs_t(df, extras, figax=None, rcParams={}, filename=None):
     ax1.plot(td, control['dA [nm]'], 'b.')
     ax1.plot(td, offset_cos(control['phi_at_tp [rad]'], *extras['popt_A']))
 
-    ax2.plot(td, control['dphi [cyc]']*1e3, 'b.')
+    ax2.plot(td, control['dphi_tp_end [cyc]']*1e3, 'b.')
     ax2.plot(td, offset_cos(control['phi_at_tp [rad]'], *extras['popt_phi'])*1e3)
 
     ax1.grid()
@@ -260,7 +363,7 @@ def plot_dA_dphi_vs_t(df, extras, figax=None, rcParams={}, filename=None):
     return fig, (ax1, ax2)
 
 
-def plot_phasekick(df, figax=None, rcParams={}, filename=None):
+def plot_phasekick(df, extras, figax=None, rcParams={}, filename=None):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
@@ -280,6 +383,7 @@ def plot_phasekick(df, figax=None, rcParams={}, filename=None):
 
     ax.plot(control.tp*1e3, control['dphi [cyc]']*scale, 'g.')
     ax.plot(data.tp*1e3, data['dphi [cyc]']*scale, 'b.')
+    ax.plot(data.tp*1e3, phase_step(data.tp, *extras['popt_phase'])*scale)
 
     ax.set_xlabel('Pulse time [ms]')
     ax.set_ylabel('Phase shift [{}.]'.format(units))
@@ -289,7 +393,7 @@ def plot_phasekick(df, figax=None, rcParams={}, filename=None):
 
     return fig, ax
 
-def plot_phasekick_corrected(df, figax=None, rcParams={}, filename=None):
+def plot_phasekick_corrected(df, extras, figax=None, rcParams={}, filename=None):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
@@ -309,6 +413,7 @@ def plot_phasekick_corrected(df, figax=None, rcParams={}, filename=None):
 
     ax.plot(control.tp*1e3, control['dphi_corrected [cyc]']*scale, 'g.')
     ax.plot(data.tp*1e3, data['dphi_corrected [cyc]']*scale, 'b.')
+    ax.plot(data.tp*1e3, phase_step(data.tp, *extras['popt_phase_corr'])*scale)
 
     ax.set_xlabel('Pulse time [ms]')
     ax.set_ylabel('Phase shift [{}.]'.format(units))
@@ -352,9 +457,13 @@ def img2uri(html_text):
 
 
 
-ReST_temp = u"""
+ReST_temp = u"""\
+================
 Phasekick report
 ================
+
+
+**Workup Parameters**
 
 ::
 
@@ -366,6 +475,23 @@ Phasekick report
           fp: {fp}
           fc: {fc}
       fs_dec: {fs_dec}
+
+
+**File Attributes**
+
+::
+
+    {file_attrs_str}
+
+
+
+**Dataset Attributes**
+
+::
+
+    {dataset_attrs_str}
+
+
 
 
 Best fit parameters
@@ -442,13 +568,16 @@ def report_adiabatic_control_phase_corr(filename,
          'T_af': T_af,
          'fp': fp,
          'fc': fc,
-         'fs_dec': fs_dec,}
+         'fs_dec': fs_dec,
+         'file_attrs_str': prnDict(dict(fh.attrs.items()))[5:-2],
+         'dataset_attrs_str': prnDict(dict(fh['data/0000'].attrs.items()))[5:-2]}
 
         d.update(extras)
 
+
         plot_zero_time(extras, filename=d['outf_zero_time'])
-        plot_phasekick(df, filename=d['outf_phasekick'])
-        plot_phasekick_corrected(df,
+        plot_phasekick(df, extras, filename=d['outf_phasekick'])
+        plot_phasekick_corrected(df, extras,
             filename=d['outf_phasekick_corr'])
         plot_amplitudes(extras, filename=d['outf_amplitudes'])
         plot_df0vs_t(df, filename=d['outf_frequency_shift'])
@@ -476,6 +605,10 @@ def report_adiabatic_control_phase_corr(filename,
 
 
 
+
+
+
+
 @click.command()
 @click.argument('filename', type=click.Path())
 @click.argument('fp', type=float)
@@ -490,8 +623,12 @@ def report_adiabatic_control_phase_corr_cil(filename,
     t_before, t_after, tbf, taf, fp, fc, basename, outdir):
     fs_dec = fc * 4
     
-    report_adiabatic_control_phase_corr(filename,
+    try:
+        report_adiabatic_control_phase_corr(filename,
     t_before, t_after, tbf, taf, fp, fc, fs_dec, basename, outdir)
+    except Exception as e:
+        print(e)
+        pass
 
 
 
