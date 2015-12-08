@@ -665,9 +665,9 @@ def fitexpfall(t, f, ti, tf, p0=None, fit_t0=False):
         return popt, pcov
 
 
-def adiabatic2lockin(gr,):
+def adiabatic2lockin(gr):
     """Return a LockIn instance from an adiabatic phasekick formatted h5 file.
-    
+
     Cantilever oscillator data is stored in 'cantilever-nm'."""
     x = gr['cantilever-nm'][:]
     dt = gr['dt [s]'].value
@@ -675,6 +675,20 @@ def adiabatic2lockin(gr,):
     t0 = gr['t0 [s]'].value
     t = np.arange(N)*dt + t0
     return LockIn(t, x, 1./dt)
+
+
+def abrupt2lockin(gr):
+    """Return a LockIn instance from an adiabatic phasekick formatted h5 file.
+
+    Cantilever oscillator data is stored in 'cantilever-nm'."""
+    x = gr['cantilever-nm'][:]
+    dt = gr['dt [s]'].value
+    t1 = gr.attrs['Abrupt BNC565 Settings.t1 [s]']
+    t_switch = gr['half periods [s]'][:]
+    t0 = -(t1 + sum(t_switch[:3]))
+    t = np.arange(x.size)*dt + t0
+    # Counting starts after t1
+    return LockIn(t, x, 1./dt), t_switch
 
 @click.command()
 @click.argument('filename', type=click.Path())
