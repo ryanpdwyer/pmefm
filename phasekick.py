@@ -19,6 +19,7 @@ import click
 import h5py
 import sys
 import os
+from tqdm import tqdm
 import io
 import pathlib
 from scipy import interpolate
@@ -145,12 +146,12 @@ def measure_dA_dphi(lock, li, tp, t_fit=2e-3):
     f0 = li.df[(li.t < tp)][-1] + li.f0(t0)
     v0 = interp.derivative(tp)[()]
     x2 = v0 / (2*np.pi*f0)
-    
+
     phi0 = np.arctan2(-x2, x0)
-    
+
     ml = masklh(li.t, tp-t_fit, tp)
     mr = masklh(li.t, tp, tp + t_fit)
-    
+
     A = abs(li.z_out)
     phi = np.unwrap(np.angle(li.z_out))/(2*np.pi)
 
@@ -162,7 +163,7 @@ def measure_dA_dphi(lock, li, tp, t_fit=2e-3):
 
     dA = np.polyval(mbAr, tp) - np.polyval(mbAl, tp)
     dphi = np.polyval(mb_phi_r, tp) - np.polyval(mb_phi_l, tp)
-    
+
     return phi0, dA, dphi
 
 # Interface layers:
@@ -185,7 +186,7 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
     for control_or_data in ('control', 'data'):
         lis[control_or_data] = []
         locks[control_or_data] = []
-        for (tp_group, tp) in zip(tp_groups, tps):
+        for (tp_group, tp) in tqdm(zip(tp_groups, tps)):
             gr = fh[control_or_data][tp_group]
             print_response = i == 0
             t1 = gr.attrs['Adiabatic Parameters.t1 [ms]'] * 0.001
@@ -204,8 +205,6 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
             lis[control_or_data].append(li)
             locks[control_or_data].append(lock)
             i += 1
-            sys.stdout.write('.')
-            sys.stdout.flush()
 
             curr_index = (control_or_data, tp_group)
             df.loc[curr_index, 'tp'] = tp
@@ -265,6 +264,104 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
 
     return df, extras
 
+
+
+def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_af,
+                        fp, fc, fs_dec):
+    tps = fh['tp tip [s]'][:] # ms to s
+    tp_groups = fh['ds'][:]
+    df = pd.DataFrame(index=pd.MultiIndex.from_product(
+        (['data', 'control'], tp_groups), names=['expt', 'ds']))
+    lis = {}
+    locks = {}
+    i = 0
+    for control_or_data in ('control', 'data'):
+        lis[control_or_data] = []
+        locks[control_or_data] = []
+        for (tp_group, tp) in tqdm(zip(tp_groups, tps)):
+            gr = fh[control_or_data][tp_group]
+            print_response = i == 0
+            N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
+            t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
+            t2 = np.sum(gr["half periods [s]"][:N2even+1])
+            tp = np.sum(gr["half periods [s]"][N2even+1:])
+            t0 = -(t1 + t2)
+            x = gr['cantilever-nm'][:]
+            dt = fh['data/0000/dt [s]'].value
+            fs = 1. / dt
+            lock = lockin.adiabatic2lockin(gr, t0=t0)
+            lock.lock2(fp=fp, fc=fc, print_response=False)
+            lock.phase(tf=-t2)
+            f0_V0 = lock.f0corr
+            lock.phase(ti=-t2, tf=0)
+            f0_V1 = lock.f0corr
+            dphi, li = lockin.delta_phi_group(
+                gr, tp, T_before, T_after,
+                T_bf, T_af, fp, fc, fs_dec, print_response=print_response,
+                t0=t0)
+
+            phi_at_tp, dA, dphi_tp_end = measure_dA_dphi(lock, li, tp)
+            lis[control_or_data].append(li)
+            locks[control_or_data].append(lock)
+            i += 1
+
+            curr_index = (control_or_data, tp_group)
+            df.loc[curr_index, 'tp'] = tp
+            df.loc[curr_index, 'dphi [cyc]'] = dphi/(2*np.pi)
+            df.loc[curr_index, 'f0 [Hz]'] = f0_V0
+            df.loc[curr_index, 'df_dV [Hz]'] = f0_V1 - f0_V0
+            df.loc[curr_index, 'dA [nm]'] = dA
+            df.loc[curr_index, 'dphi_tp_end [cyc]'] = dphi_tp_end
+            df.loc[curr_index, 'phi_at_tp [rad]'] = phi_at_tp
+            df.loc[curr_index, 'relative time [s]'] = gr['relative time [s]'].value
+
+    sys.stdout.write('\n')
+
+    df.sort_index(inplace=True)
+
+    control = df.xs('control')
+    data = df.xs('data')
+    popt_phi, pcov_phi = optimize.curve_fit(offset_cos,
+        control['phi_at_tp [rad]'], control['dphi_tp_end [cyc]'])
+    popt_A, pcov_A = optimize.curve_fit(offset_cos,
+        control['phi_at_tp [rad]'], control['dA [nm]'])
+
+    df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
+                            - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
+
+    control = df.xs('control')
+    data = df.xs('data')
+
+
+    popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
+    popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
+    
+    # Extra informationdd
+    extras = {'popt_phi': popt_phi,
+         'pcov_phi': pcov_phi,
+         'pdiag_phi': np.diagonal(pcov_phi)**0.5,
+         'popt_A': popt_A,
+         'pcov_A': pcov_A,
+         'pdiag_A': np.diagonal(pcov_A)**0.5,
+         'popt_phase_corr': popt_phase_corr,
+         'pcov_phase_corr': pcov_phase_corr,
+         'pdiag_phase_corr': np.diagonal(pcov_phase_corr)**0.5,
+         'popt_phase': popt_phase,
+         'pcov_phase': pcov_phase,
+         'pdiag_phase': np.diagonal(pcov_phase)**0.5,
+         'T_before': T_before,
+         'T_after': T_after,
+         'T_bf': T_bf,
+         'T_af': T_af,
+         'fp': fp,
+         'fc': fc,
+         'fs_dec': fs_dec,
+         'lis': lis,
+         'locks': locks}
+
+    # Do a fit to the corrected phase data here.
+
+    return df, extras
 
 # Plot zero time
 # Plot df0 vs t
@@ -354,9 +451,9 @@ def plot_dA_dphi_vs_t(df, extras, figax=None, rcParams={}, filename=None):
 
     ax1.grid()
     ax2.grid()
-    ax1.set_xlabel(r'$\tau_\mathrm{d} \: [\mu\mathrm{s}]$')
-    ax1.set_ylabel(r'$\Delta A \: [\mathrm{nm}]$')
-    ax2.set_ylabel(r'$\Delta \phi \: [\mathrm{mcyc.}]$')
+    ax1.set_xlabel(r'$\tau_\mathrm{d} \; [\mu\mathrm{s}]$')
+    ax1.set_ylabel(r'$\Delta A \; [\mathrm{nm}]$')
+    ax2.set_ylabel(r'$\Delta \phi \; [\mathrm{mcyc.}]$')
 
     if filename is not None:
         fig.savefig(filename, bbox_inches='tight')
@@ -438,7 +535,7 @@ def img2uri(html_text):
     """Convert any relative reference img tags in html_input to inline data uri.
     Return the transformed html, in utf-8 format."""
 
-    soup = bs4.BeautifulSoup(html_text)
+    soup = bs4.BeautifulSoup(html_text, "lxml")
 
     image_tags = soup.find_all('img')
 
@@ -543,7 +640,7 @@ Zero time
 """
 
 def report_adiabatic_control_phase_corr(filename,
-    T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename=None, outdir=None):
+    T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename=None, outdir=None, format='DAQ'):
     if basename is None:
         basename = os.path.splitext(filename)[0]
 
@@ -551,8 +648,12 @@ def report_adiabatic_control_phase_corr(filename,
         basename = os.path.join(outdir, os.path.basename(basename))
 
     with h5py.File(filename, 'r') as fh:
-        df, extras = workup_adiabatic_w_control_correct_phase(fh,
-            T_before, T_after, T_bf, T_af, fp, fc, fs_dec)
+        if format == 'DAQ':
+            df, extras = workup_adiabatic_w_control_correct_phase(fh,
+                T_before, T_after, T_bf, T_af, fp, fc, fs_dec)
+        elif format == 'BNC':
+            df, extras = workup_adiabatic_w_control_correct_phase_bnc(fh,
+                T_before, T_after, T_bf, T_af, fp, fc, fs_dec)
 
         d = {'outf_zero_time': basename+'-zerotime.png',
          'outf_phasekick': basename+'-phasekick-uncorrected.png',
@@ -608,7 +709,6 @@ def report_adiabatic_control_phase_corr(filename,
 
 
 
-
 @click.command()
 @click.argument('filename', type=click.Path())
 @click.argument('fp', type=float)
@@ -619,13 +719,14 @@ def report_adiabatic_control_phase_corr(filename,
 @click.option('--taf', type=float, default=0.001)
 @click.option('--basename', type=str, default=None)
 @click.option('--outdir', type=str, default=None)
-def report_adiabatic_control_phase_corr_cil(filename,
-    t_before, t_after, tbf, taf, fp, fc, basename, outdir):
+@click.option('--format', type=str, default='DAQ')
+def report_adiabatic_control_phase_corr_cli(filename,
+    t_before, t_after, tbf, taf, fp, fc, basename, outdir, format):
     fs_dec = fc * 4
     
     try:
         report_adiabatic_control_phase_corr(filename,
-    t_before, t_after, tbf, taf, fp, fc, fs_dec, basename, outdir)
+    t_before, t_after, tbf, taf, fp, fc, fs_dec, basename, outdir, format)
     except Exception as e:
         print(e)
         pass

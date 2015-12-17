@@ -148,6 +148,9 @@ class LockIn(object):
 
         self.f0_est = freq_from_fft(self.x, self.fs)
 
+    def __call__(self, key):
+        return getattr(self, key)[self.m]
+
     def lock(self, f0=None, bw_ratio=0.5, coeff_ratio=9., bw=None, coeffs=None,
              window='blackman'):
 
@@ -566,10 +569,11 @@ def plot_phasekick_control(df):
     return fig, ax
 
 def delta_phi_group(subgr, tp, T_before, T_after, T_bf=0.025, T_af=0.04,
-                    fp=1000, fc=4000, fs_dec=16000, T_before_offset=0., print_response=True):
+                    fp=1000, fc=4000, fs_dec=16000, T_before_offset=0., print_response=True, t0=None):
     y = subgr['cantilever-nm'][:]
     dt = subgr['dt [s]'].value
-    t0 = subgr['t0 [s]'].value
+    if t0 is None:
+        t0 = subgr['t0 [s]'].value
     lockstate = adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
                 fp, fc, fs_dec, T_before_offset, print_response)
     return lockstate.delta_phi, lockstate
@@ -665,14 +669,15 @@ def fitexpfall(t, f, ti, tf, p0=None, fit_t0=False):
         return popt, pcov
 
 
-def adiabatic2lockin(gr):
+def adiabatic2lockin(gr, t0=None):
     """Return a LockIn instance from an adiabatic phasekick formatted h5 file.
 
     Cantilever oscillator data is stored in 'cantilever-nm'."""
     x = gr['cantilever-nm'][:]
     dt = gr['dt [s]'].value
     N = x.size
-    t0 = gr['t0 [s]'].value
+    if t0 is None:
+        t0 = gr['t0 [s]'].value
     t = np.arange(N)*dt + t0
     return LockIn(t, x, 1./dt)
 
