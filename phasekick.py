@@ -281,46 +281,54 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
         for (tp_group, tp) in tqdm(zip(tp_groups, tps)):
             gr = fh[control_or_data][tp_group]
             print_response = i == 0
-            N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
-            t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
-            t2 = np.sum(gr["half periods [s]"][:N2even+1])
-            tp = np.sum(gr["half periods [s]"][N2even+1:])
-            t0 = -(t1 + t2)
-            x = gr['cantilever-nm'][:]
-            dt = fh['data/0000/dt [s]'].value
-            fs = 1. / dt
-            lock = lockin.adiabatic2lockin(gr, t0=t0)
-            lock.lock2(fp=fp, fc=fc, print_response=False)
-            lock.phase(tf=-t2)
-            f0_V0 = lock.f0corr
-            lock.phase(ti=-t2, tf=0)
-            f0_V1 = lock.f0corr
-            dphi, li = lockin.delta_phi_group(
-                gr, tp, T_before, T_after,
-                T_bf, T_af, fp, fc, fs_dec, print_response=print_response,
-                t0=t0)
+            try:
+                N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
+                t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
+                t2 = np.sum(gr["half periods [s]"][:N2even+1])
+                tp = np.sum(gr.attrs["Abrupt BNC565 CantClk.D tip [s]"])
+                t0 = -(t1 + t2)
+                x = gr['cantilever-nm'][:]
+                dt = fh['data/0000/dt [s]'].value
+                fs = 1. / dt
+                lock = lockin.adiabatic2lockin(gr, t0=t0)
+                lock.lock2(fp=fp, fc=fc, print_response=False)
+                lock.phase(tf=-t2)
+                f0_V0 = lock.f0corr
+                lock.phase(ti=-t2, tf=0)
+                f0_V1 = lock.f0corr
+                dphi, li = lockin.delta_phi_group(
+                    gr, tp, T_before, T_after,
+                    T_bf, T_af, fp, fc, fs_dec, print_response=print_response,
+                    t0=t0)
 
-            phi_at_tp, dA, dphi_tp_end = measure_dA_dphi(lock, li, tp)
-            lis[control_or_data].append(li)
-            locks[control_or_data].append(lock)
-            i += 1
+                phi_at_tp, dA, dphi_tp_end = measure_dA_dphi(lock, li, tp)
+                lis[control_or_data].append(li)
+                locks[control_or_data].append(lock)
+                i += 1
 
-            curr_index = (control_or_data, tp_group)
-            df.loc[curr_index, 'tp'] = tp
-            df.loc[curr_index, 'dphi [cyc]'] = dphi/(2*np.pi)
-            df.loc[curr_index, 'f0 [Hz]'] = f0_V0
-            df.loc[curr_index, 'df_dV [Hz]'] = f0_V1 - f0_V0
-            df.loc[curr_index, 'dA [nm]'] = dA
-            df.loc[curr_index, 'dphi_tp_end [cyc]'] = dphi_tp_end
-            df.loc[curr_index, 'phi_at_tp [rad]'] = phi_at_tp
-            df.loc[curr_index, 'relative time [s]'] = gr['relative time [s]'].value
+                curr_index = (control_or_data, tp_group)
+                df.loc[curr_index, 'tp'] = tp
+                df.loc[curr_index, 'dphi [cyc]'] = dphi/(2*np.pi)
+                df.loc[curr_index, 'f0 [Hz]'] = f0_V0
+                df.loc[curr_index, 'df_dV [Hz]'] = f0_V1 - f0_V0
+                df.loc[curr_index, 'dA [nm]'] = dA
+                df.loc[curr_index, 'dphi_tp_end [cyc]'] = dphi_tp_end
+                df.loc[curr_index, 'phi_at_tp [rad]'] = phi_at_tp
+                df.loc[curr_index, 'relative time [s]'] = gr['relative time [s]'].value
+            except Exception as e:
+                print(e)
+                pass
 
     sys.stdout.write('\n')
 
     df.sort_index(inplace=True)
+    print(df)
 
-    control = df.xs('control')
-    data = df.xs('data')
+    df_clean = df.dropna()
+
+    control = df_clean.xs('control')
+    data = df_clean.xs('data')
+
     popt_phi, pcov_phi = optimize.curve_fit(offset_cos,
         control['phi_at_tp [rad]'], control['dphi_tp_end [cyc]'])
     popt_A, pcov_A = optimize.curve_fit(offset_cos,
@@ -329,8 +337,8 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
     df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
                             - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
 
-    control = df.xs('control')
-    data = df.xs('data')
+    control = df_clean.xs('control')
+    data = df_clean.xs('data')
 
 
     popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
