@@ -707,6 +707,74 @@ def report_adiabatic_control_phase_corr(filename,
 
 
 
+def gr2lock(gr, fp=2000, fc=8000):
+    half_periods = gr["half periods [s]"][:]
+    N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
+    t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
+    t2 = np.sum(gr["half periods [s]"][:N2even+1])
+    tp = np.sum(gr["half periods [s]"][N2even+1:])
+    t0 = -(t1 + t2)
+    x = gr['cantilever-nm'][:]
+    dt = gr['dt [s]'].value
+    t = np.arange(x.size)*dt + t0
+    lock = lockin.LockIn(t, x, 1/dt)
+    lock.lock2(fp=fp, fc=fc, print_response=False)
+    lock.phase(ti=tp+0.5e-3, tf=tp+3.5e-3)
+    lock.half_periods = half_periods
+    lock.tp = tp
+    lock.t2 = t2
+    lock.t1 = t1
+    return lock
+
+def workup_df(filename, outfile, fp, fc, tmin, tmax):
+    fh = h5py.File(filename, 'r')
+    lis = []
+    for ds_name in tqdm(fh['ds']):
+        li = gr2lock(fh['data'][ds_name], fp=fp, fc=fc)
+        li.phase(tf=-li.t2)
+        lis.append(li)
+    
+    ts = np.array([li('t') for li in lis])
+    dfs = np.array([li('df') for li in lis])
+    
+    dfs_masked = []
+    ts_masked = []
+    for t,df in zip(ts, dfs):
+        m = (t >= tmin) & (t < tmax)
+        ts_masked.append(t[m])
+        dfs_masked.append(df[m])
+    
+    ts_masked = np.array(ts_masked)    
+    dfs_masked = np.array(dfs_masked)
+    
+    t50 = np.percentile(ts_masked, 50, axis=0)
+    df50 = np.percentile(dfs_masked, 50, axis=0)
+    df15 = np.percentile(dfs_masked, 15, axis=0)
+    df85 = np.percentile(dfs_masked, 85, axis=0)
+    plt.plot(t50*1000, df50)
+    plt.plot(t50*1000, df50, 'k', linewidth=2)
+    plt.fill_between(t50*1000, df15, df85, color='0.2', alpha=0.3)
+    plt.grid()
+    plt.savefig(outfile, bbox_inches='tight', dpi=300)
+
+@click.command()
+@click.argument('filename', type=click.Path())
+@click.argument('fp', type=float)
+@click.argument('fc', type=float)
+@click.argument('tmin', type=float)
+@click.argument('tmax', type=float)
+@click.option('--outdir', type=str, default=None)
+@click.option('--basename', type=str, default=None)
+def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename):
+    if basename is None:
+        basename = os.path.splitext(filename)[0]
+
+    if outdir is not None:
+        basename = os.path.join(outdir, os.path.basename(basename))
+
+    workup_df(filename, basename+'.png', fp, fc, tmin, tmax)
+
+
 
 
 @click.command()

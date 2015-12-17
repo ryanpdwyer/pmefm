@@ -526,7 +526,7 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
     f1 = li.f0corr
     phi0 = -li.phi[0]
     li.phase(ti=tp, tf=(tp+T_af))
-    f2 = li.f0corr
+    f2 = li.y
     # Decimate by a conservative factor
     dec = int(np.floor(fs / fs_dec))
     
@@ -568,7 +568,7 @@ def plot_phasekick_control(df):
     ax.set_ylabel('phase shift [cyc.]')
     return fig, ax
 
-def delta_phi_group(subgr, tp, T_before, T_after, T_bf=0.025, T_af=0.04,
+def delta_phi_group(subgr, tp, T_before, T_after, T_bf=0.002, T_af=0.002,
                     fp=1000, fc=4000, fs_dec=16000, T_before_offset=0., print_response=True, t0=None):
     y = subgr['cantilever-nm'][:]
     dt = subgr['dt [s]'].value
