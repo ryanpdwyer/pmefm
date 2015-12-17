@@ -526,7 +526,7 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
     f1 = li.f0corr
     phi0 = -li.phi[0]
     li.phase(ti=tp, tf=(tp+T_af))
-    f2 = li.y
+    f2 = li.f0corr
     # Decimate by a conservative factor
     dec = int(np.floor(fs / fs_dec))
     
