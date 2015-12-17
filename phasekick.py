@@ -285,7 +285,7 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
                 N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
                 t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
                 t2 = np.sum(gr["half periods [s]"][:N2even+1])
-                tp = np.sum(gr.attrs["Abrupt BNC565 CantClk.D tip [s]"])
+                tp = np.sum(gr.attrs["Abrupt BNC565 CantClk.tp tip [s]"])
                 t0 = -(t1 + t2)
                 x = gr['cantilever-nm'][:]
                 dt = fh['data/0000/dt [s]'].value
