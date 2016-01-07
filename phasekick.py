@@ -319,57 +319,59 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
                 print(e)
                 pass
 
-    sys.stdout.write('\n')
+    try:
+        df.sort_index(inplace=True)
+        print(df)
 
-    df.sort_index(inplace=True)
-    print(df)
+        df_clean = df.dropna()
 
-    df_clean = df.dropna()
+        control = df_clean.xs('control')
+        data = df_clean.xs('data')
 
-    control = df_clean.xs('control')
-    data = df_clean.xs('data')
+        popt_phi, pcov_phi = optimize.curve_fit(offset_cos,
+            control['phi_at_tp [rad]'], control['dphi_tp_end [cyc]'])
+        popt_A, pcov_A = optimize.curve_fit(offset_cos,
+            control['phi_at_tp [rad]'], control['dA [nm]'])
 
-    popt_phi, pcov_phi = optimize.curve_fit(offset_cos,
-        control['phi_at_tp [rad]'], control['dphi_tp_end [cyc]'])
-    popt_A, pcov_A = optimize.curve_fit(offset_cos,
-        control['phi_at_tp [rad]'], control['dA [nm]'])
+        df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
+                                - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
 
-    df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
-                            - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
-
-    control = df_clean.xs('control')
-    data = df_clean.xs('data')
+        df_clean = df.dropna()
+        control = df_clean.xs('control')
+        data = df_clean.xs('data')
 
 
-    popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
-    popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
-    
-    # Extra informationdd
-    extras = {'popt_phi': popt_phi,
-         'pcov_phi': pcov_phi,
-         'pdiag_phi': np.diagonal(pcov_phi)**0.5,
-         'popt_A': popt_A,
-         'pcov_A': pcov_A,
-         'pdiag_A': np.diagonal(pcov_A)**0.5,
-         'popt_phase_corr': popt_phase_corr,
-         'pcov_phase_corr': pcov_phase_corr,
-         'pdiag_phase_corr': np.diagonal(pcov_phase_corr)**0.5,
-         'popt_phase': popt_phase,
-         'pcov_phase': pcov_phase,
-         'pdiag_phase': np.diagonal(pcov_phase)**0.5,
-         'T_before': T_before,
-         'T_after': T_after,
-         'T_bf': T_bf,
-         'T_af': T_af,
-         'fp': fp,
-         'fc': fc,
-         'fs_dec': fs_dec,
-         'lis': lis,
-         'locks': locks}
+        popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
+        popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
 
-    # Do a fit to the corrected phase data here.
+        # Extra informationdd
+        extras = {'popt_phi': popt_phi,
+             'pcov_phi': pcov_phi,
+             'pdiag_phi': np.diagonal(pcov_phi)**0.5,
+             'popt_A': popt_A,
+             'pcov_A': pcov_A,
+             'pdiag_A': np.diagonal(pcov_A)**0.5,
+             'popt_phase_corr': popt_phase_corr,
+             'pcov_phase_corr': pcov_phase_corr,
+             'pdiag_phase_corr': np.diagonal(pcov_phase_corr)**0.5,
+             'popt_phase': popt_phase,
+             'pcov_phase': pcov_phase,
+             'pdiag_phase': np.diagonal(pcov_phase)**0.5,
+             'T_before': T_before,
+             'T_after': T_after,
+             'T_bf': T_bf,
+             'T_af': T_af,
+             'fp': fp,
+             'fc': fc,
+             'fs_dec': fs_dec,
+             'lis': lis,
+             'locks': locks}
 
-    return df, extras
+        return df, extras
+
+    except Exception as e:
+        print(e)
+        raise
 
 # Plot zero time
 # Plot df0 vs t
