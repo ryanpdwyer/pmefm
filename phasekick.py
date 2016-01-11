@@ -45,7 +45,7 @@ def prnDict(aDict, br='\n', html=0,
             keyAlign='l',   sortKey=0,
             keyPrefix='',   keySuffix='',
             valuePrefix='', valueSuffix='',
-            leftMargin=4,   indent=1 ):
+            leftMargin=4,   indent=1, braces=True):
     '''
 return a string representive of aDict in the following format:
     {
@@ -114,10 +114,13 @@ require: odict() # an ordered dict, if you want the keys sorted.
         if leftMargin:
           tmp = [ ' '*leftMargin + x for x in tmp ]
           
+        if not braces:
+            tmp = tmp[5:-2] 
+
         if html:
             return '<code>%s</code>' %br.join(tmp).replace(' ','&nbsp;')
         else:
-            return br.join(tmp)     
+            return br.join(tmp)    
     else:
         return '{}'
 
@@ -680,8 +683,8 @@ def report_adiabatic_control_phase_corr(filename,
          'fp': fp,
          'fc': fc,
          'fs_dec': fs_dec,
-         'file_attrs_str': prnDict(dict(fh.attrs.items()))[5:-2],
-         'dataset_attrs_str': prnDict(dict(fh['data/0000'].attrs.items()))[5:-2]}
+         'file_attrs_str': prnDict(dict(fh.attrs.items()), braces=False),
+         'dataset_attrs_str': prnDict(dict(fh['data/0000'].attrs.items()), braces=False)}
 
         d.update(extras)
 
