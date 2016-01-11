@@ -25,6 +25,9 @@ import docutils
 from phasekick import img2uri, prnDict
 from pystan.misc import _array_to_table
 
+directory = os.path.split(__file__)[0]
+model_code_dict_fname = os.path.join(directory, 'stan_model_code.pkl')
+
 def memodict(f):
     """ Memoization decorator for a function taking a single argument """
     class memodict(dict):
@@ -46,7 +49,7 @@ def df2dict(filename):
 # Need a dictionary of just, model_name, model_code pickled.
 
 def model_pkl_file(model_name):
-    return 'stanmodels/'+model_name+'.pkl'
+    return os.path.join(directory, 'stanmodels/', model_name+'.pkl')
 
 def update_models_dict(model_code_dict, old_model_code_dict={}, test=False):
     """Compile outdated stan models and return in a dictionary for pickling.
@@ -369,6 +372,33 @@ model {
     y ~ normal(df_inf*(t + tau*(exp(-t/tau)-1)),
         sigma_0 + sigma_1 * t + sigma_2 * t .* t);
 }
+""",
+'exp2_sq_nc':
+"""
+data {
+int<lower=0> N;
+vector[N] t;
+vector[N] y;
+real<upper=0> mu_df_inf;
+real<lower=0> sigma_df_inf;
+vector<lower=0>[2] mu_tau;
+vector<lower=0>[2] sigma_tau;
+}
+parameters {
+    real<upper=0> df_inf;
+    real<lower=0,upper=1> df_ratio;
+    positive_ordered[2] tau;
+    real<lower=0> sigma_0;
+    real<lower=0> sigma_1;
+    real<lower=0> sigma_2;
+}
+model {
+    df_inf ~ cauchy(mu_df_inf, sigma_df_inf);
+    tau ~ cauchy(mu_tau, sigma_tau);
+    y ~ normal(df_inf * (df_ratio * (t + tau[1]*(exp(-t/tau[1])-1)) +
+                (1 - df_ratio) * (t + tau[2]*(exp(-t/tau[2])-1))),
+        sigma_0 + sigma_1 * t + sigma_2 * t .* t);
+}
 """}
 
 default_priors = {
@@ -427,6 +457,12 @@ default_priors = {
     'mu_df_inf': -20,
     'sigma_df_inf': 15,
     },
+    'exp2_sq_nc':{
+    'mu_tau': np.array([0.5, 0.5]),
+    'sigma_tau': np.array([1, 1]),
+    'mu_df_inf': -20,
+    'sigma_df_inf': 15,
+    },
 }
 
 model_fit_err = {
@@ -435,10 +471,8 @@ model_fit_err = {
     'exp': ('single exponential', 'cumsum'),
     'exp_sq': ('single exponential', 'quadratic'),
      'exp_sq_no_control': ('single exponential', 'quadratic'),
+     'exp2_sq_nc': ('double exponential', 'quadratic')
 }
-
-directory = os.path.split(__file__)[0]
-model_code_dict_fname = os.path.join(directory, 'stan_model_code.pkl')
 
 def update_models(model_code_dict=model_code_dict,
                   stanmodel_pkl_file=model_code_dict_fname,
@@ -470,7 +504,7 @@ pickle.dump(model_code_dict, open(model_code_dict_fname, 'wb'))
 
 @memodict
 def get_model(model_name):
-    return pickle.load(open(model_pkl_file(model_name, 'rb')))
+    return pickle.load(open(model_pkl_file(model_name), 'rb'))
 
 def get_priors(model_name, data, **priors):
     """Return a copy of data, updated with priors kwargs,
@@ -895,24 +929,60 @@ def fh2dphi(fh):
     df = fh2df(fh)
     return df2dphi(df, fh['data/t'][:])
 
+def exp2df(t, df, tau):
+    return (np.outer(df, np.ones(t.size))
+            * (1 - np.exp(-np.outer(np.ones(tau.size), t) /
+            np.outer(tau, np.ones(t.size)))))
 
-def fh_exp2dphi(fh):
-    t = fh['data/t'][:]
-    df = fh['params/df_inf'][:]
-    tau = fh['params/tau'][:]
+def exp2dphi(t, df, tau):
     return (np.outer(df, t) +
             np.outer(df * tau, np.ones(t.size))
             * (np.exp(-np.outer(np.ones(tau.size), t) /
             np.outer(tau, np.ones(t.size)))-1))
 
 
+def fh_exp2dphi(fh):
+    t = fh['data/t'][:]
+    df = fh['params/df_inf'][:]
+    tau = fh['params/tau'][:]
+    return exp2dphi(t, df, tau)
+
+
 def fh_exp2df(fh):
     t = fh['data/t'][:]
     df = fh['params/df_inf'][:]
     tau = fh['params/tau'][:]
-    return (np.outer(df, np.ones(t.size)) *
-            (1 - np.exp(-np.outer(np.ones(tau.size), t) /
-            np.outer(tau, np.ones(t.size)))))
+
+    return exp2df(t, df, tau)
+
+
+def fh_exp_doub2df(fh):
+    t = fh['data/t'][:]
+    df_inf = fh['params/df_inf'][:]
+    ratio = fh['params/df_ratio'][:]
+    tau = fh['params/tau'][:]
+
+    df = df_inf * np.c_[ratio, 1-ratio].T
+
+    out = np.zeros((df_inf.size, t.size))
+    for _df, _tau in zip(df, tau.T):
+        out += exp2df(t, _df, _tau)
+
+    return out
+
+def fh_exp_doub2dphi(fh):
+    t = fh['data/t'][:]
+    df_inf = fh['params/df_inf'][:]
+    ratio = fh['params/df_ratio'][:]
+    tau = fh['params/tau'][:]
+
+    df = df_inf * np.c_[ratio, 1-ratio].T
+
+    out = np.zeros((df_inf.size, t.size))
+    for _df, _tau in zip(df, tau.T):
+        out += exp2dphi(t, _df, _tau)
+
+    return out
 
 def get_fit_type(fh):
     return model_fit_err[fh['model_name'].value][0]
@@ -926,6 +996,8 @@ def get_y_fit(fh):
     fit_type = get_fit_type(fh)
     if fit_type == 'single exponential':
         return fh_exp2dphi(fh)
+    elif fit_type == 'double exponential':
+        return fh_exp_doub2dphi(fh)
     elif fit_type == 'integrate ddf':
         return fh2dphi(fh)
 
@@ -941,6 +1013,8 @@ def get_df(fh):
     fit_type = get_fit_type(fh)
     if fit_type == 'single exponential':
         return fh_exp2df(fh)
+    elif fit_type == 'double exponential':
+        return fh_exp_doub2df(fh)
     elif fit_type == 'integrate ddf':
         return fh2df(fh)
 
