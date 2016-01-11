@@ -11,9 +11,9 @@ def test_model_code_dict():
 }
 
     expected_output = {
-'a': ('a', hash('a')),
-'b': ('modified b', hash('modified b')),
-'c': ('new model', hash('new model'))
+'a': 'a',
+'b': 'modified b',
+'c': 'new model'
 }
 
 

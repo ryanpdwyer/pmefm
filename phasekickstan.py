@@ -25,6 +25,13 @@ import docutils
 from phasekick import img2uri, prnDict
 from pystan.misc import _array_to_table
 
+def memodict(f):
+    """ Memoization decorator for a function taking a single argument """
+    class memodict(dict):
+        def __missing__(self, key):
+            ret = self[key] = f(key)
+            return ret 
+    return memodict().__getitem__
 
 def df2dict(filename):
     """Extract a csv file into the dictionary of data required by stan models."""
@@ -36,26 +43,30 @@ def df2dict(filename):
     return {'N': tp.size, 't':tp, 'y_control': phi_control, 'y': phi_data}
 
 
-def update_models_dict(model_code_dict, existing_models={}, test=False):
+# Need a dictionary of just, model_name, model_code pickled.
+
+def model_pkl_file(model_name):
+    return 'stanmodels/'+model_name+'.pkl'
+
+def update_models_dict(model_code_dict, old_model_code_dict={}, test=False):
     """Compile outdated stan models and return in a dictionary for pickling.
 
     Models are recompiled (which can take 10-20 seconds) if the model code has
-    changed, or the model_name is n"""
-    updated_models = {}
+    changed."""
+    updated_model_code_dict = {}
     for model_name, model_code in model_code_dict.items():
-        if model_name not in existing_models or model_code != existing_models[model_name][0]:
+        if model_name not in old_model_code_dict or model_code != old_model_code_dict[model_name]:
             # test = True bypasses time-intensive compilation,
             # so this function can be tested quickly.
-            if test:
-                updated_models[model_name] = (model_code, hash(model_code))
-            else:
-                updated_models[model_name] = (model_code,
-                                 pystan.StanModel(model_code=model_code,
-                                                  model_name=model_name))
+            updated_model_code_dict[model_name] = (model_code)
+            if not test:
+                sm = pystan.StanModel(model_code=model_code,
+                                                  model_name=model_name)
+                pickle.dump(sm, open(model_pkl_file(model_name), 'wb'))
         else:
-            updated_models[model_name] = existing_models[model_name]
+            updated_model_code_dict[model_name] = old_model_code_dict[model_name]
 
-    return updated_models
+    return updated_model_code_dict
 
 
 
@@ -427,11 +438,10 @@ model_fit_err = {
 }
 
 directory = os.path.split(__file__)[0]
-stanmodel_pkl_file = os.path.join(directory, 'stan_models.pkl')
-
+model_code_dict_fname = os.path.join(directory, 'stan_model_code.pkl')
 
 def update_models(model_code_dict=model_code_dict,
-                  stanmodel_pkl_file=stanmodel_pkl_file,
+                  stanmodel_pkl_file=model_code_dict_fname,
                   recompile_all=False,
                   global_model=True):
     """Update stan models if model code has changed. Otherwise load from disk.
@@ -454,7 +464,13 @@ def update_models(model_code_dict=model_code_dict,
 
 update_models()
 
+pickle.dump(model_code_dict, open(model_code_dict_fname, 'wb'))
+
 # This should probably be a class
+
+@memodict
+def get_model(model_name):
+    return pickle.load(open(model_pkl_file(model_name, 'rb')))
 
 def get_priors(model_name, data, **priors):
     """Return a copy of data, updated with priors kwargs,
@@ -512,9 +528,9 @@ class PhasekickModel(object):
     """A class to store phasekick model data."""
     def __init__(self, model_name, data_or_fname, model=None, priors=None):
         self.model_name = model_name
-        self.model_code = models[model_name][0]
+        self.model_code = models[model_name]
         if model is None:
-            self.sm = models[model_name][1]
+            self.sm = get_model(model_name)
         else:
             self.sm = model
         if isinstance(data_or_fname, string_types):
