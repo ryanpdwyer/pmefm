@@ -659,7 +659,7 @@ def fitexpfall(t, f, ti, tf, p0=None, fit_t0=False):
     if p0 is None:
         popt, pcov = curve_fit(expfall, t[m], f[m])
     else:
-        popt, pcov = curve_fit(expfall, t[m], f[m])
+        popt, pcov = curve_fit(expfall, t[m], f[m], p0)
 
     if fit_t0:
         popt2 = list(popt)

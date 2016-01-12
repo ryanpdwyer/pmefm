@@ -399,7 +399,67 @@ model {
                 (1 - df_ratio) * (t + tau[2]*(exp(-t/tau[2])-1))),
         sigma_0 + sigma_1 * t + sigma_2 * t .* t);
 }
-"""}
+""",
+'dflive':
+"""
+data {
+int<lower=0> N;
+vector[N] t;
+vector[N] y;
+vector[N] y_err;
+int<lower=0> N_neg;
+vector[N_neg] y_neg;
+vector[N_neg] y_neg_err;
+real<upper=0> mu_df_inf;
+real<lower=0> sigma_df_inf;
+real<lower=0> mu_tau;
+real<lower=0> sigma_tau;
+real mu_df0;
+real<lower=0> sigma_df0;
+}
+parameters {
+    real<upper=0> df_inf;
+    real<lower=0> tau;
+    real df0;
+}
+model {
+    df_inf ~ cauchy(mu_df_inf, sigma_df_inf);
+    tau ~ cauchy(mu_tau, sigma_tau);
+    df0 ~ cauchy(mu_df0, sigma_df0);
+    y_neg ~ normal(df0, y_neg_err);
+    y ~ normal(df0 + df_inf * (1 - exp(-t/tau)), y_err);
+}
+""",
+'dflive_sigma':
+"""
+data {
+int<lower=0> N;
+vector[N] t;
+vector[N] y;
+real<upper=0> mu_df_inf;
+real<lower=0> sigma_df_inf;
+real<lower=0> mu_tau;
+real<lower=0> sigma_tau;
+real mu_df0;
+real<lower=0> sigma_df0;
+real<lower=0> mu_sigma;
+real<lower=0> sigma_sigma;
+}
+parameters {
+    real<upper=0> df_inf;
+    real<lower=0> tau;
+    real df0;
+    real<lower=0> sigma; 
+}
+model {
+    df_inf ~ cauchy(mu_df_inf, sigma_df_inf);
+    tau ~ cauchy(mu_tau, sigma_tau);
+    df0 ~ cauchy(mu_df0, sigma_df0);
+    sigma ~ normal(mu_sigma, sigma_sigma);
+    y ~ normal(df0 + df_inf * (1 - exp(-t/tau)), sigma);
+}
+"""
+}
 
 default_priors = {
     'df': {
@@ -463,6 +523,24 @@ default_priors = {
     'mu_df_inf': -20,
     'sigma_df_inf': 15,
     },
+    'dflive': {
+    'mu_tau': 0.5,
+    'sigma_tau': 1,
+    'mu_df_inf': -20,
+    'sigma_df_inf': 15,
+    'mu_df0': -150,
+    'sigma_df0': 150
+    },
+    'dflive_sigma': {
+    'mu_tau': 0.5,
+    'sigma_tau': 1,
+    'mu_df_inf': -20,
+    'sigma_df_inf': 15,
+    'mu_df0': -150,
+    'sigma_df0': 150,
+    'mu_sigma': 0.,
+    'sigma_sigma': 20.,
+    }
 }
 
 model_fit_err = {
@@ -563,15 +641,18 @@ class PhasekickModel(object):
     def __init__(self, model_name, data_or_fname, model=None, priors=None):
         self.model_name = model_name
         self.model_code = models[model_name]
+
         if model is None:
             self.sm = get_model(model_name)
         else:
             self.sm = model
+
         if isinstance(data_or_fname, string_types):
             self.data = df2dict(data_or_fname)
             self.data_fname = data_or_fname
         else:
             self.data = data_or_fname
+
         self.default_priors = default_priors[model_name]
         if priors is None:
             self.priors = copy.copy(self.default_priors)
@@ -596,10 +677,6 @@ class PhasekickModel(object):
             save(gr_or_fname, self.model_name, self.model_code, self.out,
                  compress=compress)
 
-
-# Next steps:
-# Plot phase shift
-# Plot reduced residuals
 
 def percentile_func(x):
     return lambda p: np.percentile(x, p, axis=0)

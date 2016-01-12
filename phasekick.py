@@ -739,7 +739,7 @@ def gr2lock(gr, fp=2000, fc=8000):
     lock.t1 = t1
     return lock
 
-def workup_df(filename, outfile, fp, fc, tmin, tmax):
+def workup_df(filename, outfile, fp, fc, tmin, tmax, saveh5=False):
     fh = h5py.File(filename, 'r')
     lis = []
     for ds_name in tqdm(fh['ds']):
@@ -760,15 +760,32 @@ def workup_df(filename, outfile, fp, fc, tmin, tmax):
     ts_masked = np.array(ts_masked)    
     dfs_masked = np.array(dfs_masked)
     
-    t50 = np.percentile(ts_masked, 50, axis=0)
+    t50 = np.median(ts_masked, axis=0)
     df50 = np.percentile(dfs_masked, 50, axis=0)
-    df15 = np.percentile(dfs_masked, 15, axis=0)
-    df85 = np.percentile(dfs_masked, 85, axis=0)
+    df15 = np.percentile(dfs_masked, 15.9, axis=0)
+    df85 = np.percentile(dfs_masked, 84.1, axis=0)
+    sigma = np.std(dfs_masked, ddof=1, axis=0)
     plt.plot(t50*1000, df50)
     plt.plot(t50*1000, df50, 'k', linewidth=2)
     plt.fill_between(t50*1000, df15, df85, color='0.2', alpha=0.3)
     plt.grid()
     plt.savefig(outfile, bbox_inches='tight', dpi=300)
+
+    if saveh5:
+        basefile = os.path.splitext(outfile)[0]
+        fh = h5py.File(basefile+'-df-avg'+'.h5', 'w')
+        fh['t'] = t50
+        fh['df50'] = df50
+        fh['df85'] = df85
+        fh['df15'] = df15
+        fh['df_sigma'] = sigma
+        fh['df_err'] = sigma / len(ts)**0.5
+        fh.attrs['input_filename'] = filename
+        fh.attrs['fp'] = fp
+        fh.attrs['fc'] = fc
+        fh.attrs['tmin'] = tmin
+        fh.attrs['tmax'] = tmax
+
 
 @click.command()
 @click.argument('filename', type=click.Path())
@@ -778,14 +795,15 @@ def workup_df(filename, outfile, fp, fc, tmin, tmax):
 @click.argument('tmax', type=float)
 @click.option('--outdir', type=str, default=None)
 @click.option('--basename', type=str, default=None)
-def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename):
+@click.option('--saveh5/--no-saveh5', default=False)
+def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename, saveh5):
     if basename is None:
         basename = os.path.splitext(filename)[0]
 
     if outdir is not None:
         basename = os.path.join(outdir, os.path.basename(basename))
 
-    workup_df(filename, basename+'.png', fp, fc, tmin, tmax)
+    workup_df(filename, basename+'.png', fp, fc, tmin, tmax, saveh5)
 
 
 
