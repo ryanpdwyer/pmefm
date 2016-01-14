@@ -423,11 +423,79 @@ parameters {
     real df0;
 }
 model {
-    df_inf ~ cauchy(mu_df_inf, sigma_df_inf);
-    tau ~ cauchy(mu_tau, sigma_tau);
-    df0 ~ cauchy(mu_df0, sigma_df0);
+    df_inf ~ normal(mu_df_inf, sigma_df_inf);
+    tau ~ normal(mu_tau, sigma_tau);
+    df0 ~ normal(mu_df0, sigma_df0);
     y_neg ~ normal(df0, y_neg_err);
     y ~ normal(df0 + df_inf * (1 - exp(-t/tau)), y_err);
+}
+""",
+'dflive_doub':
+"""
+data {
+int<lower=0> N;
+vector[N] t;
+vector[N] y;
+vector[N] y_err;
+int<lower=0> N_neg;
+vector[N_neg] y_neg;
+vector[N_neg] y_neg_err;
+real<upper=0> mu_df_inf;
+real<lower=0> sigma_df_inf;
+vector<lower=0>[2] mu_tau;
+vector<lower=0>[2] sigma_tau;
+real mu_df0;
+real<lower=0> sigma_df0;
+}
+parameters {
+    real<upper=0> df_inf;
+    real<lower=0,upper=1> ratio;
+    positive_ordered[2] tau;
+    real df0;
+}
+model {
+    df_inf ~ normal(mu_df_inf, sigma_df_inf);
+    tau ~ normal(mu_tau, sigma_tau);
+    df0 ~ normal(mu_df0, sigma_df0);
+    y_neg ~ normal(df0, y_neg_err);
+    y ~ normal(df0 + df_inf * (
+                        ratio * (1 - exp(-t/tau[1])) +
+                        (1 - ratio) * (1-exp(-t/tau[2]))
+                        )
+                , y_err);
+}
+""",
+'dflive_stretched':
+"""
+data {
+int<lower=0> N;
+vector[N] t;
+vector[N] y;
+vector[N] y_err;
+int<lower=0> N_neg;
+vector[N_neg] y_neg;
+vector[N_neg] y_neg_err;
+real<upper=0> mu_df_inf;
+real<lower=0> sigma_df_inf;
+real<lower=0> mu_tau;
+real<lower=0> sigma_tau;
+real mu_df0;
+real<lower=0> sigma_df0;
+}
+parameters {
+    real<upper=0> df_inf;
+    real<lower=0> tau;
+    real df0;
+    real<lower=0,upper=1> beta;
+}
+model {
+    df_inf ~ normal(mu_df_inf, sigma_df_inf);
+    tau ~ normal(mu_tau, sigma_tau);
+    df0 ~ normal(mu_df0, sigma_df0);
+    y_neg ~ normal(df0, y_neg_err);
+    for (i in 1:N) {
+        y[i] ~ normal(df0 + df_inf * (1 - exp(-pow(t[i]/tau, beta))), y_err);
+    }
 }
 """,
 'dflive_sigma':
@@ -457,6 +525,40 @@ model {
     df0 ~ cauchy(mu_df0, sigma_df0);
     sigma ~ normal(mu_sigma, sigma_sigma);
     y ~ normal(df0 + df_inf * (1 - exp(-t/tau)), sigma);
+}
+""",
+'stretched_exp_sq_nc':
+"""
+data {
+int<lower=0> N;
+vector[N] t;
+vector[N] y;
+real<upper=0> mu_df_inf;
+real<lower=0> sigma_df_inf;
+real<lower=0> mu_tau;
+real<lower=0> sigma_tau;
+}
+parameters {
+    real<upper=0> df_inf;
+    real<lower=0> tau;
+    real<lower=0> sigma_0;
+    real<lower=0> sigma_1;
+    real<lower=0> sigma_2;
+    real<lower=0,upper=1> beta;
+}
+model {
+    df_inf ~ normal(mu_df_inf, sigma_df_inf);
+    tau ~ normal(mu_tau, sigma_tau);
+    for (i in 1:N) {
+    y[i] ~ normal(df_inf * (t[i] +
+               tau * (-tgamma(1/beta) +
+                      gamma_p(1/beta, pow(t[i] / tau, beta))
+                     )
+                   ),
+        sigma_0 + sigma_1 * t[i] + sigma_2 * t[i] * t[i]
+        );
+    }
+
 }
 """
 }
@@ -517,6 +619,12 @@ default_priors = {
     'mu_df_inf': -20,
     'sigma_df_inf': 15,
     },
+    'stretched_exp_sq_nc': {
+    'mu_tau': 0.5,
+    'sigma_tau': 1,
+    'mu_df_inf': -20,
+    'sigma_df_inf': 15,
+    },
     'exp2_sq_nc':{
     'mu_tau': np.array([0.5, 0.5]),
     'sigma_tau': np.array([1, 1]),
@@ -524,6 +632,22 @@ default_priors = {
     'sigma_df_inf': 15,
     },
     'dflive': {
+    'mu_tau': 0.5,
+    'sigma_tau': 1,
+    'mu_df_inf': -20,
+    'sigma_df_inf': 15,
+    'mu_df0': -150,
+    'sigma_df0': 150
+    },
+    'dflive_doub': {
+    'mu_df_inf': -20,
+    'sigma_df_inf': 10,
+    'mu_df0': 0,
+    'sigma_df0': 5,
+    'mu_tau': np.array([0, 1.]),
+    'sigma_tau': np.array([2.5, 5.]),
+    },
+    'dflive_stretched': {
     'mu_tau': 0.5,
     'sigma_tau': 1,
     'mu_df_inf': -20,
@@ -632,7 +756,7 @@ def save(gr, model_name, model_code, out, compress=True):
         try:
             data_gr.create_dataset(key, val.shape, **kwargs)
             data_gr[key][:] = val
-        except AttributeError:
+        except (AttributeError, TypeError):
             data_gr[key] = val
 
 
