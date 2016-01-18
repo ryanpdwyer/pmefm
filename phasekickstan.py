@@ -1157,8 +1157,9 @@ def fh_exp2df(fh):
     return exp2df(t, df, tau)
 
 
-def fh_exp_doub2df(fh):
-    t = fh['data/t'][:]
+def fh_exp_doub2df(fh, t=None):
+    if t is None:
+        t = fh['data/t'][:]
     df_inf = fh['params/df_inf'][:]
     ratio = fh['params/df_ratio'][:]
     tau = fh['params/tau'][:]
@@ -1171,8 +1172,9 @@ def fh_exp_doub2df(fh):
 
     return out
 
-def fh_exp_doub2dphi(fh):
-    t = fh['data/t'][:]
+def fh_exp_doub2dphi(fh, t=None):
+    if t is None:
+        t = fh['data/t'][:]
     df_inf = fh['params/df_inf'][:]
     ratio = fh['params/df_ratio'][:]
     tau = fh['params/tau'][:]

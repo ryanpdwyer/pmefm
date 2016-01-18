@@ -101,16 +101,18 @@ def _print_magnitude_data(w, rep, fs):
 def lock2(f0, fp, fc, fs, coeff_ratio=8, coeffs=None,
           window='blackman', print_response=True):
     """Create a gentle fir filter. Pass frequencies below fp, cutoff frequencies
-    above fc, and gradually taper to 0 in between.
-    """
-    nyq = fs/2
+    above fc, and gradually taper to 0 in between."""
+
+    # Convert to digital frequencies, normalizing f_nyq to 1,
+    # as requested by scipy.signal.firwin2
+    nyq = fs / 2
     fp = fp / nyq
     fc = fc / nyq
 
     if coeffs is None:
         coeffs = int(round(coeff_ratio / fc, 0))
 
-    # Force number of coefficients odd
+    # Force number of tukey coefficients odd
     alpha = (1-fp*1.0/fc)
     n = int(round(1000. / alpha) // 2)
 
@@ -123,12 +125,18 @@ def lock2(f0, fp, fc, fs, coeff_ratio=8, coeffs=None,
     # Append fm = nyquist frequency by hand; needed by firwin2
     fm[-1] = 1.
     m = signal.tukey(N, alpha=alpha)
+    # Only take the falling part of the tukey window,
+    # not the part equal to zero
     mm[:-1] = m[n:]
 
+    # Use approx. 8x more frequencies than total coefficients we need
+    nfreqs = 2**(int(round(np.log2(coeffs)))+3)+1
+    
     b = signal.firwin2(coeffs, fm, mm,
-                       nfreqs=2**(int(round(np.log2(coeffs)))+3)+1,
+                       nfreqs=nfreqs,
                        window=window)
 
+    # Force filter gain to 1 at DC; corrects for small rounding errors
     b = b / np.sum(b)
 
     w, rep = signal.freqz(b, worN=np.pi*np.array([0., fp/2, fp, fc, 2*fc,
