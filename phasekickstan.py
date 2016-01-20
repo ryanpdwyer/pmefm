@@ -373,6 +373,29 @@ model {
         sigma_0 + sigma_1 * t + sigma_2 * t .* t);
 }
 """,
+'exp_sigma':
+"""
+data {
+int<lower=0> N;
+vector[N] t;
+vector[N] y;
+vector<lower=0>[N] sigma;
+real<upper=0> mu_df_inf;
+real<lower=0> sigma_df_inf;
+real<lower=0> mu_tau;
+real<lower=0> sigma_tau;
+}
+parameters {
+    real<upper=0> df_inf;
+    real<lower=0> tau;
+}
+model {
+    df_inf ~ cauchy(mu_df_inf, sigma_df_inf);
+    tau ~ cauchy(mu_tau, sigma_tau);
+    y ~ normal(df_inf*(t + tau*(exp(-t/tau)-1)),
+               sigma);
+}
+""",
 'exp2_sq_nc':
 """
 data {
@@ -614,6 +637,12 @@ default_priors = {
     'sigma_df_inf': 15,
     },
     'exp_sq_no_control': {
+    'mu_tau': 0.5,
+    'sigma_tau': 1,
+    'mu_df_inf': -20,
+    'sigma_df_inf': 15,
+    },
+    'exp_sigma': {
     'mu_tau': 0.5,
     'sigma_tau': 1,
     'mu_df_inf': -20,
