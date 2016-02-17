@@ -23,6 +23,8 @@ from tqdm import tqdm
 import io
 import pathlib
 from scipy import interpolate
+from scipy import signal
+from six import string_types
 from scipy.optimize import curve_fit
 from scipy.signal.signaltools import _centered
 import lockin
@@ -31,6 +33,9 @@ import docutils.core
 import base64
 import bs4
 
+
+def percentile_func(x):
+    return lambda p: np.percentile(x, p, axis=0)
 
 def masklh(x, l=None, r=None):
     if l is None:
@@ -87,7 +92,7 @@ require: odict() # an ordered dict, if you want the keys sorted.
             aDict = odict()
             for k in keys:
                 aDict[k] = dic[k]
-            
+
         #------------------- wrap keys with ' ' (quotes) if str
         tmp = ['{']
         ks = [type(x)==str and "'%s'"%x or x for x in aDict.keys()]
@@ -102,8 +107,8 @@ require: odict() # an ordered dict, if you want the keys sorted.
             #-------------------------- Adjust key width
             k = {1            : str(ks[i]).ljust(maxKeyLen),
                  keyAlign=='r': str(ks[i]).rjust(maxKeyLen) }[1]
-            
-            v = vs[i]        
+
+            v = vs[i]
             tmp.append(' '* indent+ '%s%s%s:%s%s%s,' %(
                         keyPrefix, k, keySuffix,
                         valuePrefix,v,valueSuffix))
@@ -113,14 +118,14 @@ require: odict() # an ordered dict, if you want the keys sorted.
 
         if leftMargin:
           tmp = [ ' '*leftMargin + x for x in tmp ]
-          
+
         if not braces:
-            tmp = tmp[5:-2] 
+            tmp = tmp[5:-2]
 
         if html:
             return '<code>%s</code>' %br.join(tmp).replace(' ','&nbsp;')
         else:
-            return br.join(tmp)    
+            return br.join(tmp)
     else:
         return '{}'
 
@@ -239,8 +244,8 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
 
     popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
     popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
-    
-    # Extra informationdd
+
+    # Extra information
     extras = {'popt_phi': popt_phi,
          'pcov_phi': pcov_phi,
          'pdiag_phi': np.diagonal(pcov_phi)**0.5,
@@ -718,7 +723,16 @@ def report_adiabatic_control_phase_corr(filename,
             pass
 
 
-
+def gr2t(gr):
+    half_periods = gr["half periods [s]"][:]
+    N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
+    t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
+    t2 = np.sum(gr["half periods [s]"][:N2even+1])
+    tp = np.sum(gr["half periods [s]"][N2even+1:])
+    t0 = -(t1 + t2)
+    dt = gr['dt [s]'].value
+    x = gr['cantilever-nm'][:]
+    return np.arange(x.size)*dt + t0
 
 def gr2lock(gr, fp=2000, fc=8000):
     half_periods = gr["half periods [s]"][:]
@@ -739,27 +753,94 @@ def gr2lock(gr, fp=2000, fc=8000):
     lock.t1 = t1
     return lock
 
-def workup_df(filename, outfile, fp, fc, tmin, tmax, saveh5=False):
+
+def workup_df(fname_or_fh, fp, fc, tmin, tmax,
+              tiphase=None, tfphase=None, butter=None, periodogram=True):
+    if isinstance(fname_or_fh, string_types):
+        fh = h5py.File(fname_or_fh, 'r')
+        fname = fname_or_fh
+    else:
+        fh = fname_or_fh
+        fname = fh.filename
+
+    lis = []
+    for ds_name in tqdm(fh['ds']):
+        li = gr2lock(fh['data'][ds_name], fp=fp, fc=fc)
+        if butter is not None:
+            li.lock_butter(**butter)
+        if tfphase is None:
+            tfphase = -li.t2
+        li.phase(ti=tiphase, tf=tfphase)
+        lis.append(li)
+
+    ts = np.array([li('t') for li in lis])
+    dfs = np.array([li('df') for li in lis])
+    dphis = np.array([li('dphi') for li in lis])
+
+    dfs_masked = []
+    ts_masked = []
+    dphis_masked = []
+    for t, df, dphi in zip(ts, dfs, dphis):
+        m = (t >= tmin) & (t < tmax)
+        ts_masked.append(t[m])
+        dfs_masked.append(df[m])
+        dphis_masked.append(dphi[m])
+
+    ts_masked = np.array(ts_masked)
+    dfs_masked = np.array(dfs_masked)
+    dphis_masked = np.array(dphis_masked)
+
+    tfunc = percentile_func(ts_masked)
+    dffunc = percentile_func(dfs_masked)
+
+    d = {'lis': lis, 'ts': ts_masked, 'dfs': dfs_masked,
+            'tf': tfunc, 'dff': dffunc, 'params': {
+                'fname_or_fh': fname,
+                'fp': fp,
+                'fc': fc,
+                'tmin': tmin,
+                'tmax': tmax,
+                'tiphase': tiphase,
+                'tfphase': tfphase,
+                'butter': butter
+            },
+            }
+
+    if periodogram:
+        psd_f, psd_phi = signal.periodogram(dphis_masked/(2*np.pi), fs=li.fs, detrend='linear')
+        _, psd_df = signal.periodogram(dfs_masked, fs=li.fs, detrend='linear')
+        d['_psd_phi_all'] = psd_phi
+        d['_psd_df_all'] = psd_df
+        d['psd_f'] = psd_f
+        d['psd_phi'] = np.mean(psd_phi, axis=0)
+        d['psd_df'] = np.mean(psd_df, axis=0)
+
+    return d
+
+
+
+
+def workup_df_plot(filename, outfile, fp, fc, tmin, tmax, saveh5=False):
     fh = h5py.File(filename, 'r')
     lis = []
     for ds_name in tqdm(fh['ds']):
         li = gr2lock(fh['data'][ds_name], fp=fp, fc=fc)
         li.phase(tf=-li.t2)
         lis.append(li)
-    
+
     ts = np.array([li('t') for li in lis])
     dfs = np.array([li('df') for li in lis])
-    
+
     dfs_masked = []
     ts_masked = []
-    for t,df in zip(ts, dfs):
+    for t, df in zip(ts, dfs):
         m = (t >= tmin) & (t < tmax)
         ts_masked.append(t[m])
         dfs_masked.append(df[m])
-    
-    ts_masked = np.array(ts_masked)    
+
+    ts_masked = np.array(ts_masked)
     dfs_masked = np.array(dfs_masked)
-    
+
     t50 = np.median(ts_masked, axis=0)
     df50 = np.percentile(dfs_masked, 50, axis=0)
     df15 = np.percentile(dfs_masked, 15.9, axis=0)
@@ -803,7 +884,7 @@ def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename, saveh5):
     if outdir is not None:
         basename = os.path.join(outdir, os.path.basename(basename))
 
-    workup_df(filename, basename+'.png', fp, fc, tmin, tmax, saveh5)
+    workup_df_plot(filename, basename+'.png', fp, fc, tmin, tmax, saveh5)
 
 
 

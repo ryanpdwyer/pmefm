@@ -22,7 +22,7 @@ sp = scipy
 from scipy.optimize import curve_fit
 from six import string_types
 import docutils
-from phasekick import img2uri, prnDict
+from phasekick import img2uri, prnDict, percentile_func
 from pystan.misc import _array_to_table
 
 directory = os.path.split(__file__)[0]
@@ -830,9 +830,6 @@ class PhasekickModel(object):
             save(gr_or_fname, self.model_name, self.model_code, self.out,
                  compress=compress)
 
-
-def percentile_func(x):
-    return lambda p: np.percentile(x, p, axis=0)
 
 def cdf(x, loc, scale):
     """The cumulative probability function of the normal distribution."""

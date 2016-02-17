@@ -35,6 +35,7 @@ def _fit_phase(t, phase, amp, phase_reversals=True):
     f = lambda x: np.sum(amp**2*abs((abs(abs(phase - (x[0]*t + x[1])) - dphi_max) - dphi_max))**2)
     return f
 
+
 def auto_phase(t, z, x0=np.array([0., 0.]), phase_reversals=True):
     """"""
     phase = np.angle(z)
@@ -84,7 +85,7 @@ def parabolic(f, x):
 
 def _print_magnitude_data(w, rep, fs):
     df = pd.DataFrame()
-    df['f'] = w /(2*np.pi) * fs
+    df['f'] = w / (2*np.pi) * fs
     df['mag'] = abs(rep)
     df['dB'] = 20 * np.log10(df['mag'].values)
     df.sort_values(by="f", inplace=True)
@@ -131,7 +132,7 @@ def lock2(f0, fp, fc, fs, coeff_ratio=8, coeffs=None,
 
     # Use approx. 8x more frequencies than total coefficients we need
     nfreqs = 2**(int(round(np.log2(coeffs)))+3)+1
-    
+
     b = signal.firwin2(coeffs, fm, mm,
                        nfreqs=nfreqs,
                        window=window)
@@ -240,7 +241,7 @@ or provide more data.""".format(coeffs, t.size))
         t = self.t
         fs = self.fs
         nyq = fs / 2.
-        f3dB = f3dB / nyq 
+        f3dB = f3dB / nyq
 
         self.iir = ba = signal.iirfilter(N, f3dB, btype='low')
 
@@ -284,13 +285,12 @@ or provide more data.""".format(coeffs, t.size))
         else:
             mask = m & (t >= ti) & (t < tf)
 
-
         self.mb = mb = auto_phase(t[mask], phi[mask], x0)
 
         self.phi_fit = np.polyval(mb, t)
 
-        self.dphi = np.unwrap(((self.phi - self.phi_fit + np.pi) % (2*np.pi))
-                               - np.pi)
+        self.dphi = np.unwrap((
+            (self.phi - self.phi_fit + np.pi) % (2*np.pi)) - np.pi)
 
         self.df = np.gradient(self.dphi) * self.fs / (2*np.pi)
 
@@ -537,7 +537,7 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
     f2 = li.f0corr
     # Decimate by a conservative factor
     dec = int(np.floor(fs / fs_dec))
-    
+
     def f_var(t):
         return np.where(t > tp, f2, f1)
 
@@ -546,7 +546,7 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
     lockstate.dphi = np.unwrap(np.angle(lockstate.z_out))
     lockstate.df = np.gradient(lockstate.dphi) * (
             fs / (dec * 2*np.pi))
-    
+
     lockstate.tp = tp
     lockstate.t = t = lockstate.get_t()
     lockstate.delta_phi = (np.mean(lockstate.dphi[(t >= tp) & (t < (tp + T_after))]) - 
