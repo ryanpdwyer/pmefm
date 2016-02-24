@@ -15,7 +15,7 @@ import h5py
 import sys
 import pathlib
 from scipy.optimize import curve_fit
-from scipy.signal.signaltools import _centered
+from scipy.signal.signaltools import _centered, _next_regular
 
 # Inputs: t, x
 # Cantilever amplitude, phase, frequency
@@ -48,15 +48,16 @@ def freq_from_fft(sig, fs):
 
     """
     # Compute Fourier transform of windowed signal
+    N = _next_regular(sig.size)
     windowed = sig * signal.blackmanharris(len(sig))
-    f = np.fft.rfft(windowed)
+    f = np.fft.rfft(windowed, N)
 
     # Find the peak and interpolate to get a more accurate peak
     i = np.argmax(abs(f)) # Just use this for less-accurate, naive version
     true_i = parabolic(np.log(abs(f)), i)[0]
 
     # Convert to equivalent frequency
-    return fs * true_i / len(windowed)
+    return fs * true_i / N
 
 
 def parabolic(f, x):
