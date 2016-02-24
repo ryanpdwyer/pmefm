@@ -151,6 +151,24 @@ def lock2(f0, fp, fc, fs, coeff_ratio=8, coeffs=None,
 
 
 class LockIn(object):
+    """A basic digital lock-in amplifier. 
+
+    Run an input signal x through a digital lock-in amplifier.
+    A finite impulse response (FIR) lock-in filter can be provided by
+    `lock` or `lock2`, or a custom FIR filter can be used by directly
+    calling `run`. After generating the complex lock-in output, the lock-in
+    can be phased by running `phase`, or `autophase`.
+
+    Parameters
+    ----------
+    t: array_like
+        Time array
+    x: array_like
+        Signal array
+    fs: float
+        Sampling rate
+
+    """
     def __init__(self, t, x, fs):
         self.t = t
         self.x = x
@@ -159,10 +177,33 @@ class LockIn(object):
         self.f0_est = freq_from_fft(self.x, self.fs)
 
     def __call__(self, key):
+        """Shorthand for validly masked section of any data array."""
         return getattr(self, key)[self.m]
+
+    def run(self, f0=None, fir=None):
+        if f0 is None:
+            self.f0 = f0 = self.f0_est
+        if fir is not None:
+            self.fir = fir
+
+        self.z = z = signal.fftconvolve(self.x * np.exp(-2j*np.pi*f0*self.t),
+                                        2*self.fir,
+                                        "same")
+
+        n_fir = self.fir.size
+        indices = np.arange(self.t.size)
+        # Valid region mask
+        # This is borrowed explicitly from scipy.signal.sigtools.fftconvolve
+        self.m = m = np.zeros_like(self.t, dtype=bool)
+        self.m[_centered(indices, self.t.size - n_fir + 1)] = True
+
+        self.A = abs(self.z)
+        self.phi = np.angle(self.z)
+
 
     def lock(self, f0=None, bw_ratio=0.5, coeff_ratio=9., bw=None, coeffs=None,
              window='blackman'):
+        """Standard, windowed finite impulse response filter. """
 
         t = self.t
         fs = self.fs
@@ -182,24 +223,14 @@ class LockIn(object):
 Reduce coeffs by increasing bw, bw_ratio, or decreasing coeff_ratio,
 or provide more data.""".format(coeffs, t.size))
 
-        self.b = b = signal.firwin(coeffs, bw, window=window)
+        self.fir = b = signal.firwin(coeffs, bw, window=window)
 
         w, rep = signal.freqz(b, worN=np.pi*np.array([0., bw/2, bw, f0/self.fs, f0/(self.fs/2.), 1.]))
 
         print("Response:")
         _print_magnitude_data(w, rep, fs)
 
-        self.z = z = signal.fftconvolve(self.x * np.exp(-2j*np.pi*f0*t), 2*b,
-                                       "same")
-
-        n_fir = b.size
-        indices = np.arange(t.size)
-        # Valid region mask
-        # This is borrowed explicitly from scipy.signal.sigtools.fftconvolve
-        self.m = m = _centered(indices, t.size - n_fir + 1)
-
-        self.A = abs(self.z)
-        self.phi = np.angle(self.z)
+        self.run(f0=f0)
 
     def lock2(self, f0=None, fp_ratio=0.1, fc_ratio=0.4, coeff_ratio=8,
               fp=None, fc=None, coeffs=None, window='blackman',
@@ -225,18 +256,8 @@ or provide more data.""".format(coeffs, t.size))
     Reduce coeffs by increasing bw, bw_ratio, or decreasing coeff_ratio,
     or provide more data.""".format(coeffs, t.size))
 
-        self.z = z = signal.fftconvolve(self.x * np.exp(-2j*np.pi*f0*t), 2*b,
-                                       "same")  # Use other valid criteria?
 
-        n_fir = b.size
-        indices = np.arange(t.size)
-        # Valid region mask
-        # This is borrowed explicitly from scipy.signal.sigtools.fftconvolve
-        self.m = m = np.zeros_like(t, dtype=bool)
-        self.m[_centered(indices, t.size - n_fir + 1)] = True
-
-        self.A = abs(self.z)
-        self.phi = np.angle(self.z)
+        self.run(f0=f0)
 
     def lock_butter(self, N, f3dB, t_exclude=0, f0=None, print_response=True):
         t = self.t
@@ -458,20 +479,22 @@ class FIRStateLockVarF(object):
         self.w0 = lambda t: f0(t) / fs
         self.phi0 = self.phi_i = phi0 + 2*np.pi*self.w0(t0)
         self.t0 = t0
-        self.t_now = t0
+        self._current_t = t0  # This field updates as incoming data arrives
         self.fs = fs
         self.t0_dec = t0 + self.nfir_mid / self.fs
+        # Stores filtered, lock-in data waiting to be decimated
         self.z = np.array([], dtype=np.complex128)
+        # Decimated output
         self.z_out = np.array([], dtype=np.complex128)
 
     def filt(self, data):
         n = self.fir.size
         m = data.size
-        t = self.t_now + np.arange(m, dtype=np.float64) / self.fs
+        t = self._current_t + np.arange(m, dtype=np.float64) / self.fs
         w = self.w0(t)
         phi = (-2*np.pi*np.cumsum(w) + self.phi_i) % (2*np.pi)
         self.phi_i = phi[-1]
-        self.t_now = t[-1]
+        self._current_t = t[-1]
 
         z = np.r_[self.z, data * np.exp(1j*phi)]
         y = signal.fftconvolve(z, 2*self.fir, mode="full")
