@@ -4,10 +4,11 @@ These routines compile and store useful models to disk, then provide utility
 functions for working with the models;
 """
 from __future__ import division, absolute_import, print_function
-import cPickle as pickle
+from six.moves import cPickle as pickle
 import os
 import copy
 import io
+from collections import OrderedDict
 import datetime
 import pandas as pd
 import numpy as np
@@ -18,6 +19,10 @@ import matplotlib.pyplot as plt
 import scipy
 import scipy.stats
 from scipy import signal
+from scipy import stats
+import seaborn as sns
+from matplotlib.offsetbox import AnchoredText
+sns.set_style('white')
 sp = scipy
 from scipy.optimize import curve_fit
 from six import string_types
@@ -35,15 +40,6 @@ def memodict(f):
             ret = self[key] = f(key)
             return ret 
     return memodict().__getitem__
-
-def df2dict(filename):
-    """Extract a csv file into the dictionary of data required by stan models."""
-    df = pd.read_csv(filename, index_col=[0, 1])
-    df = df.sort_values('tp')
-    phi_data = df.xs('data')['dphi_corrected [cyc]'].values*1e3
-    tp = df.xs('data')['tp'].values*1e3
-    phi_control = df.xs('control')['dphi_corrected [cyc]'].values*1e3
-    return {'N': tp.size, 't':tp, 'y_control': phi_control, 'y': phi_data}
 
 
 # Need a dictionary of just, model_name, model_code pickled.
@@ -70,7 +66,6 @@ def update_models_dict(model_code_dict, old_model_code_dict={}, test=False):
             updated_model_code_dict[model_name] = old_model_code_dict[model_name]
 
     return updated_model_code_dict
-
 
 
 # Priors should be model parameters,
@@ -727,7 +722,10 @@ def update_models(model_code_dict=model_code_dict,
 
     return models
 
-update_models()
+try:
+    update_models()
+except ValueError:
+    update_models(recompile_all=True)
 
 pickle.dump(model_code_dict, open(model_code_dict_fname, 'wb'))
 
@@ -746,6 +744,19 @@ def get_priors(model_name, data, **priors):
     updated_data.update(updated_priors)
     return updated_data
 
+
+def df2dict(df_or_fname):
+    """Extract a csv file into the dictionary of data required by stan models."""
+    if isinstance(df_or_fname, string_types):
+        df = pd.read_csv(df_or_fname, index_col=[0, 1])
+    else:
+        df = df_or_fname
+
+    df = df.sort_values('tp')
+    phi_data = df.xs('data')['dphi_corrected [cyc]'].values*1e3
+    tp = df.xs('data')['tp'].values*1e3
+    phi_control = df.xs('control')['dphi_corrected [cyc]'].values*1e3
+    return {'N': tp.size, 't':tp, 'y_control': phi_control, 'y': phi_data}
 
 def run(model_name, data, chains=4, iter=2000, **priors):
     """Run the model associated with model_name"""
@@ -812,14 +823,26 @@ class PhasekickModel(object):
         else:
             self.priors = priors
 
-    def run(self, chains=4, iter=2000, priors=None, **priors_kwargs):
+    def run(self, chains=4, iter=2000, priors=None, init='random', **priors_kwargs):
         if priors is not None:
             self.priors = priors
         self.priors.update(priors_kwargs)
         updated_data = copy.copy(self.data)
         updated_data.update(self.priors)
-        self.out = self.sm.sampling(data=updated_data, chains=chains, iter=iter)
+        self.out = self.sm.sampling(data=updated_data, chains=chains, iter=iter,
+                                   init=init)
         return self.out
+
+    def optimize(self, algorithm=None, priors=None, init='random', **priors_kwargs):
+        if priors is not None:
+            self.priors = priors
+        
+        self.priors.update(priors_kwargs)
+        updated_data = copy.copy(self.data)
+        updated_data.update(self.priors)
+        self.popt = self.sm.optimizing(data=updated_data, init=init,
+                                       algorithm=algorithm)
+        return self.popt
 
     def save(self, gr_or_fname, compress=True):
         if isinstance(gr_or_fname, string_types):
@@ -857,6 +880,124 @@ def gr2summary_str(gr, ndigits=2):
                 gr['summary_colnames'][:], ndigits)
     ]
     return '\n\n'.join(summary)
+
+
+def halfnorm_stan(x, loc=0, scale=1, lower=0):
+    total = 1 - stats.norm.cdf(lower, scale=scale, loc=loc)
+    return np.where(x >= lower, stats.norm.pdf(x, loc=loc, scale=scale), 0.)
+
+
+def halfcauchy_stan(x, loc=0, scale=1, lower=0.):
+    total = 1 - stats.cauchy.cdf(lower, scale=scale, loc=loc)
+    return np.where(x >= lower, stats.cauchy.pdf(x, loc=loc, scale=scale), 0.)
+
+
+def range_from_pts(pts, percentile=1, pad=1.25):
+    xmax = np.percentile(pts, 100-percentile)
+    xmin = np.percentile(pts, percentile)
+    xmid = (xmax + xmin) / 2.
+    delta_x = (xmax - xmin) / 2.
+    return xmid - delta_x * pad, xmid + delta_x * pad
+
+
+def params2dict(gr, N=None):
+    """Convert a hdf5 file group ``gr`` of parameters to a dictionary, splitting
+    any array parameters into separate parameters, so that it can be plotted
+    nicely."""
+    d = OrderedDict()
+    for key, val in gr.items():
+        value = val[:]
+        if len(value.shape) == 2:
+            for i in range(value.shape[1]):
+                if N is None:
+                    d[key+'[{}]'.format(i)] = value[:, i]
+                else:
+                    d[key+'[{}]'.format(i)] = value[:N, i]
+        else:
+            if N is None:
+                d[key] = value
+            else:
+                d[key] = value[:N]
+
+    return d
+
+def prior_func_exp2(xname, data, x):
+    if xname == 'tau[0]':
+        return halfnorm_stan(x, loc=data['mu_tau'][0],
+                             scale=data['sigma_tau'][0])
+    elif xname == 'tau[1]':
+        return halfnorm_stan(x, loc=data['mu_tau'][1],
+                             scale=data['sigma_tau'][1])
+    elif xname == 'df_ratio':
+        return stats.uniform.pdf(x, loc=0, scale=1)
+    elif xname == 'df_inf':
+        return halfnorm_stan(x, loc=data['mu_df_inf'],
+                             scale=data['sigma_df_inf'])
+    else:
+        # Nothing to plot for logposterior
+        return None
+
+
+def plot_all_traces(samp, data=None, prior_func=None):
+    """
+    Call prior_func(name, data, x) to get plot data.
+    """
+    N = len(samp)
+    fig, axes = plt.subplots(nrows=N, ncols=N, figsize=(N*1.5, N*1.5))
+    percent_ticks = [0.1, 0.5, 0.9]
+    for i, (yname, y) in enumerate(samp.items()):
+        ymin, ymax = range_from_pts(y)
+        yticklabels = [ymin+ p*(ymax - ymin) for p in percent_ticks]
+        for j, (xname, x) in enumerate(samp.items()):
+            xmin, xmax = range_from_pts(x)
+            xticklabels = [xmin + p*(xmax - xmin) for p in percent_ticks]
+            
+            ax = axes[i][j]
+
+            if i != j:
+                if i < j:
+                    ax.plot(x, y, '.', markersize=4, alpha=0.1)
+                else:
+                    sns.kdeplot(x, y, ax=ax)
+                ax.set_xlim(xmin, xmax)
+                ax.set_ylim(ymin, ymax)
+                ax.set_yticklabels([''])
+                ax.set_xticklabels([''])
+                namey = AnchoredText(yname, 2, frameon=False)
+                namex = AnchoredText(xname, 4, frameon=False)
+                ax.add_artist(namey)
+                ax.add_artist(namex)
+            else:
+                sns.kdeplot(x, ax=ax)
+                if prior_func is not None and data is not None:
+                    line = ax.get_lines()[0]
+                    xdata = line.get_xdata()
+                    ydata = prior_func(xname, data, xdata)
+                    if ydata is not None:
+                        ax.plot(xdata, ydata)
+                ax.set_yticklabels([''])
+                ax.set_xticklabels([''])
+                ax.set_xlim(xmin, xmax)
+                name = AnchoredText(xname,2,  frameon=False)
+                ax.add_artist(name)
+
+            # Add axis labels, limits to left, bottom plots.
+            if j == 0:
+                ax.set_ylabel(yname)
+                ylim = ax.get_ylim()
+                yticks = [ylim[0]+ p*(ylim[1] - ylim[0]) for p in percent_ticks]
+                ax.set_yticks(yticks)
+                ax.set_yticklabels(["{:.3g}".format(num) for num in yticklabels], fontsize=8)
+
+            if i == len(samp.items())-1:
+                ax.set_xlabel(xname)
+                xlim = ax.get_xlim()
+                xticks = [xlim[0]+ p*(xlim[1] - xlim[0]) for p in percent_ticks]
+                ax.set_xticks(xticks)
+                ax.set_xticklabels(["{:.3g}".format(num) for num in xticklabels], fontsize=8)
+
+    fig.tight_layout()
+    return fig, axes
 
 class PlotStanModels(object):
     def __init__(self, name, grs_or_fnames):
@@ -1003,7 +1144,34 @@ class PlotStanModels(object):
 
         return fig, ax
 
-    def report(self, outfile=None, outdir=None):
+    def plot_all_traces(self, filenames=None):
+
+        datas = [{key: val.value for key, val in gr['data'].items()} for
+                  gr in self.grs]
+        params = [params2dict(gr['params']) for gr in self.grs]
+        models = [gr['model_name'].value for gr in self.grs]
+        if filenames is None:
+            filenames = [None for _ in self.grs]
+        figaxes = []
+
+        for data, param, model, filename in zip(datas, params, models, filenames):
+            if model == 'exp2_sq_nc':
+                prior_func = prior_func_exp2
+            else:
+                prior_func = None
+
+            fig, ax = plot_all_traces(param, data, prior_func)
+            fig.subplots_adjust(wspace=0.05, hspace=0.05)
+
+            figaxes.append((fig, ax))
+
+            if filename is not None:
+                fig.savefig(filename)
+
+
+        return figaxes
+
+    def report(self, outfile=None, outdir=None, delete_images=True):
         if outfile is None:
             outfile = self.name
 
@@ -1017,6 +1185,13 @@ class PlotStanModels(object):
 
         html_fname = os.path.join(outdir, basename+'.html')
 
+        trace_plot_filenames = [os.path.join(outdir, self.name+"-trace-"+
+                                 gr['model_name'].value+'.png') for gr in self.grs]
+
+        trace_plots_str = "\n\n".join([".. image:: {}".format(s)
+                                        for s in trace_plot_filenames
+                                        ])
+
 
         phi_fname = os.path.join(outdir, self.name+'-phi.png')
         df_fname = os.path.join(outdir, self.name+'-df.png')
@@ -1025,12 +1200,14 @@ class PlotStanModels(object):
         cdf_resid_fname = os.path.join(outdir, self.name+'-cdf_resid.png')
         filt_resid_fname = os.path.join(outdir, self.name+'-filt_resid.png')
 
+
         self.plot_phi(fname=phi_fname)
         self.plot_df(fname=df_fname)
         self.plot_cdf_residuals(fname=cdf_resid_fname)
         self.plot_filtered_reduced_residuals(fname=filt_resid_fname)
         self.plot_reduced_residuals(fname=red_resid_fname)
         self.plot_residuals(fname=resid_fname)
+        self.plot_all_traces(trace_plot_filenames)
 
         locs = np.round(np.array([popt[0] for popt in self.popt_reduced_residuals]), 2)
         scales = np.round(np.array([popt[1] for popt in self.popt_reduced_residuals]), 2)
@@ -1043,18 +1220,21 @@ class PlotStanModels(object):
                 indented_str.append('    '+line)
             indented_summary_strs.append('\n'.join(indented_str))
 
-        body = """\
+
+
+        body = u"""\
 ======================
 Phasekick model report
 ======================
 
 
-Model summaries
+Model summary
 ===============
 
 ::
     
     {summary_strs}
+
 
 Phase
 -----
@@ -1094,12 +1274,17 @@ Reduced residuals cumulative distribution
     scales: {scales}
 
 
+Trace plots
+-----------
+
+{trace_plots_str}
+
 """.format(summary_strs="\n    \n".join(indented_summary_strs),
                 phi_plot=phi_fname, df_plot=df_fname,
                 resid_plot=resid_fname, red_resid_plot=red_resid_fname,
                 filt_resid_plot=filt_resid_fname,
                 cdf_resid_plot=cdf_resid_fname,
-                locs=locs, scales=scales
+                locs=locs, scales=scales, trace_plots_str=trace_plots_str
             )
 
         image_dependent_html = docutils.core.publish_string(body, writer_name='html')
@@ -1108,13 +1293,18 @@ Reduced residuals cumulative distribution
         with io.open(html_fname, 'w', encoding='utf8') as f:
             f.write(self_contained_html)
 
+        all_filenames = [phi_fname, df_fname, red_resid_fname, resid_fname,
+                      cdf_resid_fname, filt_resid_fname]
 
-        for fname in [phi_fname, df_fname, red_resid_fname, resid_fname,
-                      cdf_resid_fname, filt_resid_fname]:
-            try:
-                os.remove(fname)
-            except:
-                pass
+        all_filenames.extend(trace_plot_filenames)
+
+        if delete_images:
+
+            for fname in all_filenames:
+                try:
+                    os.remove(fname)
+                except:
+                    pass
 
 
 def sigma_sq(fh):

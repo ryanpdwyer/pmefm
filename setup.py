@@ -22,7 +22,7 @@ setup(
     zip_safe=False,
     # include_package_data=True,
     py_modules=['pmefm', 'lockin', 'phasekick', 'phasekickstan',
-                'freqphasenoise'],
+                'freqphasenoise', 'phasekick2'],
     # Add requirements here. If the requirement is difficult to install,
     # add to docs/conf.py MAGIC_MOCK, and .travis.yml 'conda install ...'
     install_requires=['numpy', 'scipy', 'matplotlib', "Click"],

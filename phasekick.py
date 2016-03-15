@@ -28,10 +28,15 @@ from six import string_types
 from scipy.optimize import curve_fit
 from scipy.signal.signaltools import _centered
 import lockin
+import phasekick2
 
 import docutils.core
 import base64
 import bs4
+
+
+def slope_filt(N):
+    pass
 
 
 def percentile_func(x):
@@ -136,12 +141,60 @@ def phase_step(t, tau, df):
 def offset_cos(phi, A, phi0, b):
     return A*np.cos(phi + phi0) + b
 
-def measure_dA_dphi(lock, li, tp, t_fit=2e-3):
-    """Correct for impulsive phase shift at end of pulse time.
+def measure_dA_dphi(lock, li, tp, t_fit=2e-3,
+                dphi_weight_before=None,
+                dphi_weight_after=None):
+    """Correct for impulsive phase shift at end of pulse time."""
 
-    Note: This will currently work poorly for long pulse times.
-    I should add an actual calculation of the phase shift directly at the end
-    of the pulse time."""
+    if dphi_weight_before is None:
+        N_b = int(round(fs*t_fit))
+    else:
+        N_b = len(dphi_weight_before)
+
+    if dphi_weight_after is None:
+        N_a = int(round(fs*t_fit))
+    else:
+        N_a = len(dphi_weight_after)
+
+    i_tp = np.arange(lock.t.size)[lock.t < tp][-1]
+    # Use 20 data points for interpolating; this is slightly over one
+    # cycle of our oscillation
+    m = np.arange(-10, 11) + i_tp
+    # This interpolator worked reasonably for similar, low-frequency sine waves
+    interp = interpolate.KroghInterpolator(lock.t[m], lock.x[m])
+    x0 = interp(tp)[()]
+    # We only need t0 approximately; the precise value of f0 doesn't matter very much.
+    t0 = li.t[(li.t < tp)][-1]
+    f0 = li.df[(li.t < tp)][-1] + li.f0(t0)
+    v0 = interp.derivative(tp)[()]
+    x2 = v0 / (2*np.pi*f0)
+
+    phi0 = np.arctan2(-x2, x0)
+
+    ml = masklh(li.t, tp-t_fit, tp)
+    mr = masklh(li.t, tp, tp + t_fit)
+
+    ml_phi = np.arange(li.t.size)[li.t <= tp][-N_b:]
+    mr_phi = np.arange(li.t.size)[li.t > tp][:N_a]
+
+    A = abs(li.z_out)
+    phi = np.unwrap(np.angle(li.z_out))/(2*np.pi)
+
+    mbAl = np.polyfit(li.t[ml], A[ml], 1)
+    mbAr = np.polyfit(li.t[mr], A[mr], 1)
+
+    mb_phi_l = np.polyfit(li.t[ml_phi], phi[ml_phi], 1, w=dphi_weight_before)
+    mb_phi_r = np.polyfit(li.t[mr_phi], phi[mr_phi], 1, w=dphi_weight_after)
+
+    dA = np.polyval(mbAr, tp) - np.polyval(mbAl, tp)
+    dphi = np.polyval(mb_phi_r, tp) - np.polyval(mb_phi_l, tp)
+
+    return phi0, dA, dphi
+
+
+def measure_dA_dphi_fir(lock, li, tp, dA_dphi_before, dA_dphi_after):
+    """Correct for impulsive phase shift at end of pulse time."""
+
     i_tp = np.arange(lock.t.size)[lock.t < tp][-1]
     # Use 20 data points for interpolating; this is slightly over one
     # cycle of our oscillation
@@ -264,7 +317,11 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
          'T_af': T_af,
          'fp': fp,
          'fc': fc,
+         'basename': basename,
+         'filename': filename,
          'fs_dec': fs_dec,
+         'file_attrs_str': prnDict(dict(fh.attrs.items()), braces=False),
+         'dataset_attrs_str': prnDict(dict(fh['data/0000'].attrs.items()), braces=False),
          'lis': lis,
          'locks': locks}
 
@@ -348,7 +405,7 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
         control = df_clean.xs('control')
         data = df_clean.xs('data')
 
-
+        # Issues here; not properly sorted, etc.
         popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
         popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
 
@@ -372,6 +429,11 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
              'fp': fp,
              'fc': fc,
              'fs_dec': fs_dec,
+            'basename': basename,
+            'filename': filename,
+            'fs_dec': fs_dec,
+            'file_attrs_str': prnDict(dict(fh.attrs.items()), braces=False),
+            'dataset_attrs_str': prnDict(dict(fh['data/0000'].attrs.items()), braces=False),
              'lis': lis,
              'locks': locks}
 
@@ -380,6 +442,254 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
     except Exception as e:
         print(e)
         raise
+
+
+def fir_tau(tau, fs, ratio=None, N=None, T=None):
+    if N is not None:
+        pass
+    elif T is not None:
+        N = int(T*fs)
+    elif ratio is not None:
+        N = int(fs*tau*ratio)
+    else:
+        raise ValueError("Must specify N or T")
+    
+    t = np.arange(N)/fs
+    h_raw = np.exp(-t/tau)
+    return h_raw / sum(h_raw)
+
+
+def workup_adiabatic_w_control_correct_phase_bnc2(fh, 
+                                                  fp, fc, fs_dec, correct_fir,
+                                                  tau_b=None, tau_a=None,
+                                                  before_fir=None,
+                                                  after_fir=None,
+                                                  ):
+    tps = fh['tp tip [s]'][:] # ms to s
+    tp_groups = fh['ds'][:]
+    df = pd.DataFrame(index=pd.MultiIndex.from_product(
+        (['data', 'control'], tp_groups), names=['expt', 'ds']))
+    lis = {}
+    locks = {}
+    i = 0
+    dt = fh['data/0000/dt [s]'].value
+    fs = 1./dt
+    lock_fir = lockin.lock2(62e3, fp=fp, fc=fc, fs=fs, coeff_ratio=8,
+                                        window='blackman', print_response=False)
+
+    N_dec = int(fs/fs_dec)
+    if before_fir is None:
+        before_fir = fir_tau(tau_b, fs, ratio=8)
+    if after_fir is None:
+        after_fir = fir_tau(tau_a, fs, ratio=8)
+
+    for control_or_data in ('control', 'data'):
+        lis[control_or_data] = []
+        locks[control_or_data] = []
+        for (tp_group, tp) in tqdm(zip(tp_groups, tps)):
+            gr = fh[control_or_data][tp_group]
+            print_response = i == 0
+            try:
+                N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
+                t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
+                t2 = np.sum(gr["half periods [s]"][:N2even+1])
+                tp = np.sum(gr.attrs["Abrupt BNC565 CantClk.tp tip [s]"])
+                t0 = -(t1 + t2)
+                x = gr['cantilever-nm'][:]
+
+                lock, li = phasekick2.individual_phasekick(x, dt, t0, t1, t2, tp, 
+                    N_dec, lock_fir, before_fir, after_fir)
+                dphi = li.delta_phi
+
+                phi_at_tp, dA, dphi_tp_end = measure_dA_dphi(lock, li, tp)
+                lis[control_or_data].append(li)
+                locks[control_or_data].append(lock)
+                i += 1
+
+                curr_index = (control_or_data, tp_group)
+                df.loc[curr_index, 'tp'] = tp
+                df.loc[curr_index, 'dphi [cyc]'] = dphi/(2*np.pi)
+                df.loc[curr_index, 'f0 [Hz]'] = li.fc0
+                df.loc[curr_index, 'df_dV [Hz]'] = li.f1 - li.fc0
+                df.loc[curr_index, 'df2_dV [Hz]'] = li.f2 - li.fc0
+                df.loc[curr_index, 'dA [nm]'] = dA
+                df.loc[curr_index, 'dphi_tp_end [cyc]'] = dphi_tp_end
+                df.loc[curr_index, 'phi_at_tp [rad]'] = phi_at_tp
+                df.loc[curr_index, 'relative time [s]'] = gr['relative time [s]'].value
+            except Exception as e:
+                print(e)
+                pass
+
+    try:
+        df.sort_index(inplace=True)
+        print(df)
+
+        df_clean = df.dropna()
+
+        control = df_clean.xs('control')
+        data = df_clean.xs('data')
+
+        popt_phi, pcov_phi = optimize.curve_fit(offset_cos,
+            control['phi_at_tp [rad]'], control['dphi_tp_end [cyc]'])
+        popt_A, pcov_A = optimize.curve_fit(offset_cos,
+            control['phi_at_tp [rad]'], control['dA [nm]'])
+
+        df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
+                                - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
+
+        df_clean = df.dropna()
+        df_clean.sort_values('tp', inplace=True)
+        control = df_clean.xs('control')
+        data = df_clean.xs('data')
+
+
+        popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
+        popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
+
+        # Extra informationdd
+        extras = {'popt_phi': popt_phi,
+             'pcov_phi': pcov_phi,
+             'pdiag_phi': np.diagonal(pcov_phi)**0.5,
+             'popt_A': popt_A,
+             'pcov_A': pcov_A,
+             'pdiag_A': np.diagonal(pcov_A)**0.5,
+             'popt_phase_corr': popt_phase_corr,
+             'pcov_phase_corr': pcov_phase_corr,
+             'pdiag_phase_corr': np.diagonal(pcov_phase_corr)**0.5,
+             'popt_phase': popt_phase,
+             'pcov_phase': pcov_phase,
+             'pdiag_phase': np.diagonal(pcov_phase)**0.5,
+             'tau_b': tau_b,
+             'tau_a': tau_a,
+             'fp': fp,
+             'fc': fc,
+             'fs_dec': fs_dec,
+             'lis': lis,
+             'locks': locks}
+
+        return df, extras
+
+    except Exception as e:
+        print(e)
+        raise
+
+
+def workup_adiabatic_w_control_correct_phase_bnc3(fh, 
+                                                  fp, fc, fs_dec,
+                                                  w_before=None,
+                                                  w_after=None):
+    tps = fh['tp tip [s]'][:] # ms to s
+    tp_groups = fh['ds'][:]
+    df = pd.DataFrame(index=pd.MultiIndex.from_product(
+        (['data', 'control'], tp_groups), names=['expt', 'ds']))
+    lis = {}
+    locks = {}
+    i = 0
+    dt = fh['data/0000/dt [s]'].value
+    fs = 1./dt
+    lock_fir = lockin.lock2(62e3, fp=fp, fc=fc, fs=fs, coeff_ratio=8,
+                                        window='blackman', print_response=False)
+
+    N_dec = int(fs/fs_dec)
+
+
+    for control_or_data in ('control', 'data'):
+        lis[control_or_data] = []
+        locks[control_or_data] = []
+        for (tp_group, tp) in tqdm(zip(tp_groups, tps)):
+            gr = fh[control_or_data][tp_group]
+            print_response = i == 0
+
+            N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
+            t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
+            t2 = np.sum(gr["half periods [s]"][:N2even+1])
+            tp = np.sum(gr.attrs["Abrupt BNC565 CantClk.tp tip [s]"])
+            t0 = -(t1 + t2)
+            x = gr['cantilever-nm'][:]
+
+            lock, li = phasekick2.individual_phasekick2(x, dt, t0, t1, t2, tp, 
+                N_dec, lock_fir, w_before, w_after)
+            dphi = li.delta_phi
+
+            phi_at_tp, dA, dphi_tp_end = measure_dA_dphi(lock, li, tp,
+                dphi_weight_before=w_before, dphi_weight_after=w_after)
+            lis[control_or_data].append(li)
+            locks[control_or_data].append(lock)
+            i += 1
+
+            curr_index = (control_or_data, tp_group)
+            df.loc[curr_index, 'tp'] = tp
+            df.loc[curr_index, 'dphi [cyc]'] = dphi/(2*np.pi)
+            df.loc[curr_index, 'f0 [Hz]'] = li.fc0
+            df.loc[curr_index, 'df_dV [Hz]'] = li.f1 - li.fc0
+            df.loc[curr_index, 'df2_dV [Hz]'] = li.f2 - li.fc0
+            df.loc[curr_index, 'dA [nm]'] = dA
+            df.loc[curr_index, 'dphi_tp_end [cyc]'] = dphi_tp_end
+            df.loc[curr_index, 'phi_at_tp [rad]'] = phi_at_tp
+            df.loc[curr_index, 'relative time [s]'] = gr['relative time [s]'].value
+
+    try:
+        df.sort_index(inplace=True)
+        print(df)
+
+        df_clean = df.dropna()
+
+        control = df_clean.xs('control')
+        data = df_clean.xs('data')
+
+        popt_phi, pcov_phi = optimize.curve_fit(offset_cos,
+            control['phi_at_tp [rad]'], control['dphi_tp_end [cyc]'])
+        popt_A, pcov_A = optimize.curve_fit(offset_cos,
+            control['phi_at_tp [rad]'], control['dA [nm]'])
+
+        df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
+                                - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
+
+        df_clean = df.dropna()
+        df_clean.sort_values('tp', inplace=True)
+        control = df_clean.xs('control')
+        data = df_clean.xs('data')
+
+
+        popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
+        popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
+
+        # Extra information
+        filename = fh.filename
+        extras = {'popt_phi': popt_phi,
+             'pcov_phi': pcov_phi,
+             'pdiag_phi': np.diagonal(pcov_phi)**0.5,
+             'popt_A': popt_A,
+             'pcov_A': pcov_A,
+             'pdiag_A': np.diagonal(pcov_A)**0.5,
+             'popt_phase_corr': popt_phase_corr,
+             'pcov_phase_corr': pcov_phase_corr,
+             'pdiag_phase_corr': np.diagonal(pcov_phase_corr)**0.5,
+             'popt_phase': popt_phase,
+             'pcov_phase': pcov_phase,
+             'pdiag_phase': np.diagonal(pcov_phase)**0.5,
+              'params':
+              {
+              'filename': filename,
+              'w_before': w_after,
+             'w_after': w_before,
+             'fp': fp,
+             'fc': fc,
+             'fs_dec': fs_dec,
+             },
+             'filename': filename,
+             'file_attrs_str': prnDict(dict(fh.attrs.items()), braces=False),
+             'dataset_attrs_str': prnDict(dict(fh['data/0000'].attrs.items()), braces=False),
+             'lis': lis,
+             'locks': locks}
+
+        return df_clean, extras
+
+    except Exception as e:
+        print(e)
+        raise
+
+
 
 # Plot zero time
 # Plot df0 vs t
@@ -572,7 +882,7 @@ def img2uri(html_text):
 
 
 
-ReST_temp = u"""\
+ReST_temp3 = u"""\
 ================
 Phasekick report
 ================
@@ -582,14 +892,7 @@ Phasekick report
 
 ::
 
-        File: {filename}
-    T_before: {T_before:.3e}
-     T_after: {T_after:.3e}
-        T_bf: {T_bf:.3e}
-        T_af: {T_af:.3e}
-          fp: {fp}
-          fc: {fc}
-      fs_dec: {fs_dec}
+    {params_str}
 
 
 **File Attributes**
@@ -678,18 +981,7 @@ def report_adiabatic_control_phase_corr(filename,
          'outf_phasekick_corr': basename+'-phasekick-corrected.png',
          'outf_amplitudes': basename+'-amplitude.png',
          'outf_frequency_shift': basename+'-frequency-shift.png',
-         'outf_amp_phase_resp': basename+'-dA-dphi.png',
-         'basename': basename,
-         'filename': filename,
-         'T_before': T_before,
-         'T_after': T_after,
-         'T_bf': T_bf,
-         'T_af': T_af,
-         'fp': fp,
-         'fc': fc,
-         'fs_dec': fs_dec,
-         'file_attrs_str': prnDict(dict(fh.attrs.items()), braces=False),
-         'dataset_attrs_str': prnDict(dict(fh['data/0000'].attrs.items()), braces=False)}
+         'outf_amp_phase_resp': basename+'-dA-dphi.png',}
 
         d.update(extras)
 
@@ -703,7 +995,7 @@ def report_adiabatic_control_phase_corr(filename,
         plot_dA_dphi_vs_t(df, extras, filename=d['outf_amp_phase_resp'])
 
 
-    ReST = ReST_temp.format(**d)
+    ReST = ReST_temp3.format(params_str**d)
     image_dependent_html = docutils.core.publish_string(ReST, writer_name='html')
     self_contained_html = unicode(img2uri(image_dependent_html), 'utf8')
 
@@ -721,6 +1013,58 @@ def report_adiabatic_control_phase_corr(filename,
             os.remove(fname)
         except:
             pass
+
+
+def report_adiabatic_control_phase_corr3(df, extras, basename=None, outdir=None):
+    if basename is None:
+        basename = os.path.splitext(extras['filename'])[0]
+
+    if outdir is not None:
+        basename = os.path.join(outdir, os.path.basename(basename))
+
+    
+    d = {
+    'basename': basename,
+    'outf_zero_time': basename+'-zerotime.png',
+     'outf_phasekick': basename+'-phasekick-uncorrected.png',
+     'outf_phasekick_corr': basename+'-phasekick-corrected.png',
+     'outf_amplitudes': basename+'-amplitude.png',
+     'outf_frequency_shift': basename+'-frequency-shift.png',
+     'outf_amp_phase_resp': basename+'-dA-dphi.png',}
+
+    d.update(extras)
+
+
+    plot_zero_time(extras, filename=d['outf_zero_time'])
+    plot_phasekick(df, extras, filename=d['outf_phasekick'])
+    plot_phasekick_corrected(df, extras,
+        filename=d['outf_phasekick_corr'])
+    plot_amplitudes(extras, filename=d['outf_amplitudes'])
+    plot_df0vs_t(df, filename=d['outf_frequency_shift'])
+    plot_dA_dphi_vs_t(df, extras, filename=d['outf_amp_phase_resp'])
+
+
+    ReST = ReST_temp3.format(params_str=prnDict(extras['params'],braces=False),
+                            **d)
+    image_dependent_html = docutils.core.publish_string(ReST, writer_name='html')
+    self_contained_html = unicode(img2uri(image_dependent_html), 'utf8')
+
+
+
+    # io module instead of built-in open because it allows specifying
+    # encoding. See http://stackoverflow.com/a/22288895/2823213
+    with io.open(basename+'.html', 'w', encoding='utf8') as f:
+        f.write(self_contained_html)
+
+    df.to_csv(basename+'.csv')
+
+    for fname in [fname for key, fname in d.items() if 'outf' in key]:
+        try:
+            os.remove(fname)
+        except:
+            pass
+
+
 
 
 def gr2t(gr):
@@ -794,6 +1138,7 @@ def workup_df(fname_or_fh, fp, fc, tmin, tmax,
     dffunc = percentile_func(dfs_masked)
 
     d = {'lis': lis, 'ts': ts_masked, 'dfs': dfs_masked,
+         'dphis': dphis_masked,
             'tf': tfunc, 'dff': dffunc, 'params': {
                 'fname_or_fh': fname,
                 'fp': fp,

@@ -93,6 +93,17 @@ def _print_magnitude_data(w, rep, fs):
     print(df.to_string(index=False, float_format="{:.3f}".format))
     return df
 
+def fir_weighted_lsq(weight_func, N):
+    """Return intercept, slope filter coefficients for a linear least squares
+    fit with weight function ``weight_func``, using ``N`` most recent points."""
+    i = np.arange(N)
+    w = weight_func(i)
+    s0 = np.sum(w)
+    s1 = np.sum(i*w)
+    s2 = np.sum(i**2 * w)
+    prefactor = 1./(s0*s2 - s1**2)
+    return prefactor*w*(s2 - s1*i), prefactor*w*(s0*i - s1)
+
 
 # x data
 # (guess f0)
