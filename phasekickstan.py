@@ -20,7 +20,7 @@ import scipy
 import scipy.stats
 from scipy import signal
 from scipy import stats
-import seaborn as sns
+import seaborn.apionly as sns
 from matplotlib.offsetbox import AnchoredText
 sns.set_style('white')
 sp = scipy

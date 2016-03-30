@@ -31,6 +31,14 @@ def lp2diff(lp, fs, tp):
     return diff
 
 
+def lps2diff(lp_before, lp_after, fs, tp):
+    Np = int(round(fs*tp, 0))
+    diff = np.zeros(lp_before.size + lp_after.size + Np)
+    diff[:lp_before.size] = lp_before[::-1]
+    diff[-lp_after.size:] = -lp_after
+    return diff
+
+
 def average_df(b, Navg, fp_ratio=1, fc_ratio=4):
     b.dt = dt = 1/b.fs
     b.N = N = int(b.T*b.fs)+1

@@ -24,6 +24,7 @@ import io
 import pathlib
 from scipy import interpolate
 from scipy import signal
+from scipy import stats
 from six import string_types
 from scipy.optimize import curve_fit
 from scipy.signal.signaltools import _centered
@@ -33,6 +34,11 @@ import phasekick2
 import docutils.core
 import base64
 import bs4
+
+def expon_weights(tau, fs, coeff_ratio=5.):
+    scale = tau * fs
+    i = np.arange(int(round(scale * coeff_ratio)))
+    return stats.expon.pdf(i, scale=scale)
 
 
 def slope_filt(N):
