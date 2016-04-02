@@ -1265,6 +1265,62 @@ def report_adiabatic_control_phase_corr_cli(filename,
 
 
 
+def align_and_mask(x, y, xi, xf):
+    x_aligned = []
+    y_aligned = []
+    for x_, y_ in zip(x, y):
+        m = (x_ >= xi) & (x_ < xf)
+        x_aligned.append(x_[m])
+        y_aligned.append(y_[m])
+    
+    return np.array(x_aligned), np.array(y_aligned)
+
+def gr2t_df(gr, fp, fc, tf):
+    lis = []
+    for ds in gr.values():
+        li = gr2lock(ds, fp=fp, fc=fc)
+        li.phase(tf=tf)
+        lis.append(li)
+        
+    ts = [li('t') for li in lis]
+    dfs = [li('df') for li in lis]
+    
+    return ts, dfs
+    
+class AverageTrEFM(object):
+    def __init__(self, ts, dfs, t_initial, t_final):
+        self.ts = ts
+        self.dfs = dfs
+        self.t_initial = t_initial
+        self.t_final = t_final
+        
+        self.t, self.df = align_and_mask(ts, dfs,
+                                         t_initial, t_final)
+        
+        self.tm = np.mean(self.t, axis=0)
+        self.tm_ms = self.tm*1e3
+        self.tm_us = self.tm*1e6
+        self.dfm = np.mean(self.df, axis=0)
+        self.t50 = self.tp(50)
+        self.df50 = self.dfp(50)
+    
+    def tp(self, p):
+        return np.percentile(self.t, p, axis=0)
+    
+    def tp_ms(self, p):
+        return self.tp(p)*1e3
+    
+    def tp_us(self, p):
+        return self.tp(p)*1e6
+    
+    def dfp(self, p):
+        return np.percentile(self.df, p, axis=0)
+    
+    @classmethod
+    def from_group(cls, gr, fp, fc, tf, t_initial, t_final):
+        ts, dfs = gr2t_df(gr, fp, fc, tf)
+        
+        return cls(ts, dfs, t_initial, t_final)
 
 
 
