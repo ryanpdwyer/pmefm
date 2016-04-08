@@ -1275,12 +1275,14 @@ def align_and_mask(x, y, xi, xf):
     
     return np.array(x_aligned), np.array(y_aligned)
 
-def gr2t_df(gr, fp, fc, tf):
+def gr2t_df(gr, fp, fc, tf, pbar=None):
     lis = []
     for ds in gr.values():
         li = gr2lock(ds, fp=fp, fc=fc)
         li.phase(tf=tf)
         lis.append(li)
+        if pbar is not None:
+            pbar.update()
         
     ts = [li('t') for li in lis]
     dfs = [li('df') for li in lis]
@@ -1317,10 +1319,10 @@ class AverageTrEFM(object):
         return np.percentile(self.df, p, axis=0)
     
     @classmethod
-    def from_group(cls, gr, fp, fc, tf, t_initial, t_final):
-        ts, dfs = gr2t_df(gr, fp, fc, tf)
+    def from_group(cls, gr, fp, fc, tf, t_initial, t_final, pbar=None):
+        ts, dfs = gr2t_df(gr, fp, fc, tf, pbar=pbar)
         
-        return cls(ts, dfs, t_initial, t_final)
+        return cls(ts, dfs, t_initial, t_final,)
 
 
 

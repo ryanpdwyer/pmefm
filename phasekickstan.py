@@ -22,7 +22,7 @@ from scipy import signal
 from scipy import stats
 import seaborn.apionly as sns
 from matplotlib.offsetbox import AnchoredText
-sns.set_style('white')
+# sns.set_style('white')
 sp = scipy
 from scipy.optimize import curve_fit
 from six import string_types
@@ -467,7 +467,7 @@ real<lower=0> sigma_df0;
 }
 parameters {
     real<upper=0> df_inf;
-    real<lower=0,upper=1> ratio;
+    real<lower=0,upper=1> df_ratio;
     positive_ordered[2] tau;
     real df0;
 }
@@ -477,8 +477,8 @@ model {
     df0 ~ normal(mu_df0, sigma_df0);
     y_neg ~ normal(df0, y_neg_err);
     y ~ normal(df0 + df_inf * (
-                        ratio * (1 - exp(-t/tau[1])) +
-                        (1 - ratio) * (1-exp(-t/tau[2]))
+                        df_ratio * (1 - exp(-t/tau[1])) +
+                        (1 - df_ratio) * (1-exp(-t/tau[2]))
                         )
                 , y_err);
 }
@@ -578,7 +578,101 @@ model {
     }
 
 }
+""",
+'dflive_doub_conv':
 """
+data {
+    int<lower=1> N;
+    int<lower=1> K;
+    vector[N] y;
+    vector[N] y_err;
+    real<upper=0> mu_df_inf;
+    real<lower=0> sigma_df_inf;
+    vector<lower=0>[2] mu_tau;
+    real mu_df0;
+    real<lower=0> sigma_df0;
+    vector[K] kern;
+    vector[N+K-1] t_eval;
+}
+parameters {
+    real<upper=0> df_inf;
+    real<lower=0,upper=1> df_ratio;
+    positive_ordered[2] tau;
+    real df0;
+}
+model {
+    vector[N+K-1] df_eval;
+    vector[N] df_conv;
+    df_inf ~ normal(mu_df_inf, sigma_df_inf);
+    tau ~ exponential(mu_tau);
+    df0 ~ normal(mu_df0, sigma_df0);
+
+    for (i in 1:(N+K-1)) {
+        if (t_eval[i] >= 0) {
+            df_eval[i] <- df0 + df_inf * (
+                              df_ratio  * (1 - exp(-t_eval[i]/tau[1])) +
+                           (1-df_ratio) * (1 - exp(-t_eval[i]/tau[2]))
+                           );
+        } else {
+            df_eval[i] <- df0;
+        } 
+    }
+
+    for (i in 1:N) {
+        df_conv[i] <- dot_product(kern, segment(df_eval, i, K));
+    }
+
+    y ~ normal(df_conv, y_err);
+}
+""",
+'dflive_conv_gauss':
+"""
+data {
+    int<lower=1> N;
+    int<lower=1> K;
+    vector[N] y;
+    vector[N] y_err;
+    real<upper=0> mu_df_inf;
+    real<lower=0> sigma_df_inf;
+    vector<lower=0>[2] mu_tau;
+    vector<lower=0>[2] sigma_tau;
+    real mu_df0;
+    real<lower=0> sigma_df0;
+    vector[K] kern;
+    vector[N+K-1] t_eval;
+}
+parameters {
+    real<upper=0> df_inf;
+    real<lower=0,upper=1> df_ratio;
+    positive_ordered[2] tau;
+    real df0;
+}
+model {
+    vector[N+K-1] df_eval;
+    vector[N] df_conv;
+    df_inf ~ normal(mu_df_inf, sigma_df_inf);
+    tau ~ normal(mu_tau, sigma_tau);
+    df0 ~ normal(mu_df0, sigma_df0);
+
+    for (i in 1:(N+K-1)) {
+        if (t_eval[i] >= 0) {
+            df_eval[i] <- df0 + df_inf * (
+                              df_ratio  * (1 - exp(-t_eval[i]/tau[1])) +
+                           (1-df_ratio) * (1 - exp(-t_eval[i]/tau[2]))
+                           );
+        } else {
+            df_eval[i] <- df0;
+        } 
+    }
+
+    for (i in 1:N) {
+        df_conv[i] <- dot_product(kern, segment(df_eval, i, K));
+    }
+
+    y ~ normal(df_conv, y_err);
+}
+"""
+
 }
 
 default_priors = {
@@ -688,7 +782,21 @@ default_priors = {
     'sigma_df0': 150,
     'mu_sigma': 0.,
     'sigma_sigma': 20.,
-    }
+    },
+    'dflive_doub_conv':
+     {'mu_df0': 0,
+     'mu_df_inf': -20,
+     'mu_tau': np.array([0.5,2.5]),
+     'sigma_df0': 2.5,
+     'sigma_df_inf': 7,},
+     'dflive_conv_gauss': {
+    'mu_df_inf': -20,
+    'sigma_df_inf': 10,
+    'mu_df0': 0,
+    'sigma_df0': 5,
+    'mu_tau': np.array([0, 1.]),
+    'sigma_tau': np.array([2.5, 5.]),
+    },
 }
 
 model_fit_err = {
@@ -724,8 +832,15 @@ def update_models(model_code_dict=model_code_dict,
 
 try:
     update_models()
-except ValueError:
-    update_models(recompile_all=True)
+except ValueError, e:
+    # Some ValueErrors caused by a missing pickle file.
+    # In that case, recompile all the models.
+    # If the Value error is just caused by the model failing to compile,
+    # re-raise the error.
+    if 'Failed to parse Stan model' in e.args[0]:
+        raise
+    else:
+        update_models(recompile_all=True)
 
 pickle.dump(model_code_dict, open(model_code_dict_fname, 'wb'))
 
@@ -823,14 +938,14 @@ class PhasekickModel(object):
         else:
             self.priors = priors
 
-    def run(self, chains=4, iter=2000, priors=None, init='random', **priors_kwargs):
+    def run(self, chains=4, iter=2000, priors=None, init='random', priors_update={}, **kwargs):
         if priors is not None:
             self.priors = priors
-        self.priors.update(priors_kwargs)
+        self.priors.update(priors_update)
         updated_data = copy.copy(self.data)
         updated_data.update(self.priors)
         self.out = self.sm.sampling(data=updated_data, chains=chains, iter=iter,
-                                   init=init)
+                                   init=init, **kwargs)
         return self.out
 
     def optimize(self, algorithm=None, priors=None, init='random', **priors_kwargs):
@@ -903,7 +1018,9 @@ def range_from_pts(pts, percentile=1, pad=1.25):
 def params2dict(gr, N=None):
     """Convert a hdf5 file group ``gr`` of parameters to a dictionary, splitting
     any array parameters into separate parameters, so that it can be plotted
-    nicely."""
+    nicely.
+
+    If N is given, take only the first N points."""
     d = OrderedDict()
     for key, val in gr.items():
         value = val[:]
