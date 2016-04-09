@@ -418,6 +418,33 @@ model {
         sigma_0 + sigma_1 * t + sigma_2 * t .* t);
 }
 """,
+'exp2_sq_nc_norm':
+"""
+data {
+int<lower=0> N;
+vector[N] t;
+vector[N] y;
+real<upper=0> mu_df_inf;
+real<lower=0> sigma_df_inf;
+vector<lower=0>[2] mu_tau;
+vector<lower=0>[2] sigma_tau;
+}
+parameters {
+    real<upper=0> df_inf;
+    real<lower=0,upper=1> df_ratio;
+    positive_ordered[2] tau;
+    real<lower=0> sigma_0;
+    real<lower=0> sigma_1;
+    real<lower=0> sigma_2;
+}
+model {
+    df_inf ~ normal(mu_df_inf, sigma_df_inf);
+    tau ~ normal(mu_tau, sigma_tau);
+    y ~ normal(df_inf * (df_ratio * (t + tau[1]*(exp(-t/tau[1])-1)) +
+                (1 - df_ratio) * (t + tau[2]*(exp(-t/tau[2])-1))),
+        sigma_0 + sigma_1 * t + sigma_2 * t .* t);
+}
+""",
 'dflive':
 """
 data {
@@ -744,6 +771,12 @@ default_priors = {
     'sigma_df_inf': 15,
     },
     'exp2_sq_nc':{
+    'mu_tau': np.array([0.5, 0.5]),
+    'sigma_tau': np.array([1, 1]),
+    'mu_df_inf': -20,
+    'sigma_df_inf': 15,
+    },
+    'exp2_sq_nc_norm': {
     'mu_tau': np.array([0.5, 0.5]),
     'sigma_tau': np.array([1, 1]),
     'mu_df_inf': -20,
