@@ -584,7 +584,7 @@ def workup_adiabatic_w_control_correct_phase_bnc3(fh,
                                                   fp, fc, fs_dec,
                                                   w_before=None,
                                                   w_after=None):
-    tps = fh['tp tip [s]'][:] # ms to s
+    tps = fh['tp tip [s]'][:]
     tp_groups = fh['ds'][:]
     df = pd.DataFrame(index=pd.MultiIndex.from_product(
         (['data', 'control'], tp_groups), names=['expt', 'ds']))
@@ -1071,8 +1071,6 @@ def report_adiabatic_control_phase_corr3(df, extras, basename=None, outdir=None)
             pass
 
 
-
-
 def gr2t(gr):
     half_periods = gr["half periods [s]"][:]
     N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
@@ -1083,6 +1081,7 @@ def gr2t(gr):
     dt = gr['dt [s]'].value
     x = gr['cantilever-nm'][:]
     return np.arange(x.size)*dt + t0
+
 
 def gr2lock(gr, fp=2000, fc=8000):
     half_periods = gr["half periods [s]"][:]
