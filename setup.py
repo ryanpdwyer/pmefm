@@ -25,7 +25,7 @@ setup(
                 'freqphasenoise', 'phasekick2'],
     # Add requirements here. If the requirement is difficult to install,
     # add to docs/conf.py MAGIC_MOCK, and .travis.yml 'conda install ...'
-    install_requires=['numpy', 'scipy', 'matplotlib', "Click"],
+    install_requires=['numpy', 'scipy', 'matplotlib', "Click", 'sigutils'],
     tests_require=['nose'],
     test_suite='nose.collector',
     entry_points='''
