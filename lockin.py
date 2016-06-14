@@ -15,6 +15,7 @@ import h5py
 import sys
 import pathlib
 from scipy.optimize import curve_fit
+from scipy import interpolate
 from scipy.signal.signaltools import _centered, _next_regular
 
 # Inputs: t, x
@@ -35,12 +36,26 @@ def _fit_phase(t, phase, amp, phase_reversals=True):
     f = lambda x: np.sum(amp**2*abs((abs(abs(phase - (x[0]*t + x[1])) - dphi_max) - dphi_max))**2)
     return f
 
+def _fit_phase_only(t, phase, amp, phase_reversals=True):
+    if phase_reversals:
+        dphi_max = np.pi/2
+    else:
+        dphi_max = np.pi
+    f = lambda x: np.sum(amp**2*abs((abs(abs(phase - (x[0])) - dphi_max) - dphi_max))**2)
+    return f
 
-def auto_phase(t, z, x0=np.array([0., 0.]), phase_reversals=True):
+
+def auto_phase(t, z, x0=np.array([0., 0.]), phase_reversals=True, adjust_f0=True):
     """"""
     phase = np.angle(z)
     amp = abs(z) / np.std(z)
-    return optimize.fmin_slsqp(_fit_phase(t, phase, amp, phase_reversals), x0,)
+    if adjust_f0:
+        mb = optimize.fmin_slsqp(_fit_phase(t, phase, amp, phase_reversals), x0,)
+    else:
+        mb = optimize.fmin_slsqp(_fit_phase_only(t, phase, amp, phase_reversals), x0[-1:],)
+
+    mb[-1] = mb[-1] - np.pi/2
+    return mb
 
 
 def freq_from_fft(sig, fs):
@@ -169,13 +184,14 @@ class LockIn(object):
     `lock` or `lock2`, or a custom FIR filter can be used by directly
     calling `run`. After generating the complex lock-in output, the lock-in
     can be phased by running `phase`, or `autophase`.
+    After phasing, the lock-in output channels X, Y, in and out of phase 
 
     Parameters
     ----------
     t: array_like
         Time array
     x: array_like
-        Signal array
+        Input signal array
     fs: float
         Sampling rate
 
@@ -192,6 +208,9 @@ class LockIn(object):
         return getattr(self, key)[self.m]
 
     def run(self, f0=None, fir=None):
+        """Run the lock-in amplifier at reference frequency ``f0``,
+        using the finite impulse response filter ``fir``.
+        """
         if f0 is None:
             self.f0 = f0 = self.f0_est
         if fir is not None:
@@ -220,6 +239,8 @@ class LockIn(object):
         fs = self.fs
         if f0 is None:
             self.f0 = f0 = self.f0_est
+        else:
+            self.f0 = f0
 
         if bw is None:
             bw = bw_ratio * f0 / (self.fs/2)
@@ -297,12 +318,35 @@ or provide more data.""".format(coeffs, t.size))
             print("Response:")
             _print_magnitude_data(w, rep, fs)
 
+    def _output_df_X_Y(self):
+        """Helper function for outputting frequency shift
+        and lock-in X, Y channels after phasing."""
+        self.df = np.gradient(self.dphi) * self.fs / (2*np.pi)
+        self.Z = np.exp(-1j*self.phi_fit) * self.z
+        self.X = self.Z.real
+        self.Y = self.Z.imag
+
+    def manual_phase(self, phi0, f0corr=None):
+        "Manually phase the lock-in output with phase phi0 (in radians)."
+        self.phi0 = phi0
+        
+        if f0corr is not None:
+            self.f0corr = f0corr
+            delta_f0 = f0corr - self.f0
+        else:
+            self.f0corr = self.f0
+            delta_f0 = 0.0
+
+        self.phi_fit = self.t * delta_f0 * 2 * np.pi + self.phi0
+
+        self._output_df_X_Y()
 
 
-    def autophase(self, ti=None, tf=None, unwrap=False, x0=[0., 0.]):
+    def autophase(self, ti=None, tf=None, unwrap=False, x0=[0., 0.], adjust_f0=True):
         t = self.t
         m = self.m
         z = self.z
+
 
         if unwrap:
             phi = np.unwrap(self.phi)
@@ -318,21 +362,29 @@ or provide more data.""".format(coeffs, t.size))
         else:
             mask = m & (t >= ti) & (t < tf)
 
-        self.mb = mb = auto_phase(t[mask], phi[mask], x0)
+        self.mb = mb = auto_phase(t[mask], phi[mask], x0, adjust_f0=adjust_f0)
+
+        self.phi0 = mb[-1]
 
         self.phi_fit = np.polyval(mb, t)
 
         self.dphi = np.unwrap((
             (self.phi - self.phi_fit + np.pi) % (2*np.pi)) - np.pi)
 
-        self.df = np.gradient(self.dphi) * self.fs / (2*np.pi)
+        if adjust_f0:
+            self.f0corr = self.f0 + mb[0] / (2*np.pi)
+        else:
+            self.f0corr = self.f0
 
-        self.f0corr = self.f0 + mb[0]
+        self._output_df_X_Y()
 
-    def phase(self, ti=None, tf=None, weight=True):
+
+    def phase(self, ti=None, tf=None, weight=True, adjust_f0=True):
         t = self.t
         m = self.m
         z = self.z
+
+        poly_order = int(adjust_f0)
 
         if ti is None and tf is None:
             mask = m
@@ -350,9 +402,9 @@ or provide more data.""".format(coeffs, t.size))
         try:
             if weight:
                 A = abs(z[mask]) / np.std(abs(z[mask]))
-                self.mb = mb = np.polyfit(t[mask], phi_norm, 1, w=A) * std
+                self.mb = mb = np.polyfit(t[mask], phi_norm, poly_order, w=A) * std
             else:
-                self.mb = mb = np.polyfit(t[mask], phi_norm, 1) * std
+                self.mb = mb = np.polyfit(t[mask], phi_norm, poly_order) * std
         except TypeError:
             print(t)
             print(ti)
@@ -364,10 +416,15 @@ or provide more data.""".format(coeffs, t.size))
         self.dphi = np.unwrap(((self.phi - self.phi_fit + np.pi) % (2*np.pi))
                               - np.pi)
 
-        self.df = np.zeros(t.size)
-        self.df = np.gradient(self.dphi) * self.fs / (2*np.pi)
+        self.phi0 = mb[-1]
 
-        self.f0corr = self.f0 + mb[0] / (2*np.pi)
+        if adjust_f0:
+            self.f0corr = self.f0 + mb[0] / (2*np.pi)
+        else:
+            self.f0corr = self.f0
+
+        self._output_df_X_Y()
+
 
     def decimate(self, factor=None):
         if factor is None:
@@ -417,6 +474,17 @@ or provide more data.""".format(coeffs, t.size))
         df = np.gradient(dphi) * self.dec_fs / (2*np.pi)
 
         self.f0_dec_direct = self.f0 + mb[0] / (2*np.pi)
+
+    def absolute_phase(self, mask, guess=0.0):
+        phi = self.phi[mask] + self.t[mask]*2*np.pi*self.f0corr
+        popt, pcov = curve_fit(lambda phi, phi0:
+            self.A[mask]*np.cos(phi+phi0), phi, self.x[mask],
+            [guess])
+
+        self.phi0abs = popt[0]
+        self.phiabs = self.phi + self.t*2*np.pi*self.f0corr + self.phi0abs
+        return popt, pcov
+
 
 
 class FIRState(object):
