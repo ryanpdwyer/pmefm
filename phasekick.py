@@ -151,7 +151,7 @@ def measure_dA_dphi(lock, li, tp, t_fit=2e-3,
                 dphi_weight_before=None,
                 dphi_weight_after=None):
     """Correct for impulsive phase shift at end of pulse time."""
-
+    fs = li.fs
     if dphi_weight_before is None:
         N_b = int(round(fs*t_fit))
     else:
