@@ -1102,6 +1102,15 @@ def gr2lock(gr, fp=2000, fc=8000):
     lock.t1 = t1
     return lock
 
+def gr2lock_daq(gr, fp=2000, fc=8000):
+    t1 = gr.attrs['Adiabatic Parameters.t1 [ms]'] * 0.001
+    t2 = gr.attrs['Adiabatic Parameters.t2 [ms]'] * 0.001
+    li = lockin.adiabatic2lockin(gr)
+    li.lock2(fp=fp, fc=fc, print_response=False)
+    li.t1 = t1
+    li.t2 = t2
+    return li
+
 
 def workup_df(fname_or_fh, fp, fc, tmin, tmax,
               tiphase=None, tfphase=None, butter=None, periodogram=True):
@@ -1170,12 +1179,17 @@ def workup_df(fname_or_fh, fp, fc, tmin, tmax,
 
 
 
-def workup_df_plot(filename, outfile, fp, fc, tmin, tmax, saveh5=False):
+def workup_df_plot(filename, outfile, fp, fc, tmin, tmax, saveh5=False, format_='BNC'):
     fh = h5py.File(filename, 'r')
     lis = []
     for ds_name in tqdm(fh['ds']):
-        li = gr2lock(fh['data'][ds_name], fp=fp, fc=fc)
-        li.phase(tf=-li.t2)
+        if format_ == 'BNC':
+            li = gr2lock(fh['data'][ds_name], fp=fp, fc=fc)
+        elif format_ == 'DAQ':
+            li = gr2lock_daq(fh[ds_name], fp=fp, fc=fc)
+        else:
+            raise ValueError("format_ must be 'BNC' or 'DAQ',\n not '{}'".format(format_))
+        li.phase(tf= max(-li.t2, tmin+5e-3))
         lis.append(li)
 
     ts = np.array([li('t') for li in lis])
@@ -1227,14 +1241,15 @@ def workup_df_plot(filename, outfile, fp, fc, tmin, tmax, saveh5=False):
 @click.option('--outdir', type=str, default=None)
 @click.option('--basename', type=str, default=None)
 @click.option('--saveh5/--no-saveh5', default=False)
-def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename, saveh5):
+@click.option('--format', type=str, default='BNC')
+def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename, saveh5, format):
     if basename is None:
         basename = os.path.splitext(filename)[0]
 
     if outdir is not None:
         basename = os.path.join(outdir, os.path.basename(basename))
 
-    workup_df_plot(filename, basename+'.png', fp, fc, tmin, tmax, saveh5)
+    workup_df_plot(filename, basename+'.png', fp, fc, tmin, tmax, saveh5, format)
 
 
 
