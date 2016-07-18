@@ -1179,14 +1179,14 @@ def workup_df(fname_or_fh, fp, fc, tmin, tmax,
 
 
 
-def workup_df_plot(filename, outfile, fp, fc, tmin, tmax, saveh5=False, format_='BNC'):
+def workup_df_plot(filename, outfile, fp, fc, tmin, tmax, saveh5=False, format_='BNC', subgr='data'):
     fh = h5py.File(filename, 'r')
     lis = []
     for ds_name in tqdm(fh['ds']):
         if format_ == 'BNC':
-            li = gr2lock(fh['data'][ds_name], fp=fp, fc=fc)
+            li = gr2lock(fh[subgr][ds_name], fp=fp, fc=fc)
         elif format_ == 'DAQ':
-            li = gr2lock_daq(fh[ds_name], fp=fp, fc=fc)
+            li = gr2lock_daq(fh[subgr][ds_name], fp=fp, fc=fc)
         else:
             raise ValueError("format_ must be 'BNC' or 'DAQ',\n not '{}'".format(format_))
         li.phase(tf= max(-li.t2, tmin+5e-3))
@@ -1242,14 +1242,15 @@ def workup_df_plot(filename, outfile, fp, fc, tmin, tmax, saveh5=False, format_=
 @click.option('--basename', type=str, default=None)
 @click.option('--saveh5/--no-saveh5', default=False)
 @click.option('--format', type=str, default='BNC')
-def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename, saveh5, format):
+@click.option('--group', type=str, default='data')
+def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename, saveh5, format, group):
     if basename is None:
         basename = os.path.splitext(filename)[0]
 
     if outdir is not None:
         basename = os.path.join(outdir, os.path.basename(basename))
 
-    workup_df_plot(filename, basename+'.png', fp, fc, tmin, tmax, saveh5, format)
+    workup_df_plot(filename, basename+'.png', fp, fc, tmin, tmax, saveh5, format, group)
 
 
 
