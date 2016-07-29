@@ -1269,6 +1269,9 @@ def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename, saveh5, format, 
 def report_adiabatic_control_phase_corr_cli(filename,
     t_before, t_after, tbf, taf, fp, fc, basename, outdir, format):
     fs_dec = fc * 4
+
+    if basename is None:
+    	basename = os.path.splitext(filename)[0]
     
     try:
         report_adiabatic_control_phase_corr(filename,
