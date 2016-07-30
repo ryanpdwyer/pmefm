@@ -317,15 +317,16 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
          'popt_phase': popt_phase,
          'pcov_phase': pcov_phase,
          'pdiag_phase': np.diagonal(pcov_phase)**0.5,
+         'params': {
          'T_before': T_before,
          'T_after': T_after,
          'T_bf': T_bf,
          'T_af': T_af,
          'fp': fp,
          'fc': fc,
-         'basename': basename,
-         'filename': filename,
          'fs_dec': fs_dec,
+         'filename': fh.filename
+         },
          'file_attrs_str': prnDict(dict(fh.attrs.items()), braces=False),
          'dataset_attrs_str': prnDict(dict(fh['data/0000'].attrs.items()), braces=False),
          'lis': lis,
@@ -415,7 +416,7 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
         popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
         popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
 
-        # Extra informationdd
+        # Extra information
         extras = {'popt_phi': popt_phi,
              'pcov_phi': pcov_phi,
              'pdiag_phi': np.diagonal(pcov_phi)**0.5,
@@ -428,6 +429,7 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
              'popt_phase': popt_phase,
              'pcov_phase': pcov_phase,
              'pdiag_phase': np.diagonal(pcov_phase)**0.5,
+             'params': {
              'T_before': T_before,
              'T_after': T_after,
              'T_bf': T_bf,
@@ -435,9 +437,8 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
              'fp': fp,
              'fc': fc,
              'fs_dec': fs_dec,
-            'basename': basename,
-            'filename': filename,
-            'fs_dec': fs_dec,
+             'filename': fh.filename
+             },
             'file_attrs_str': prnDict(dict(fh.attrs.items()), braces=False),
             'dataset_attrs_str': prnDict(dict(fh['data/0000'].attrs.items()), braces=False),
              'lis': lis,
@@ -1001,7 +1002,8 @@ def report_adiabatic_control_phase_corr(filename,
         plot_dA_dphi_vs_t(df, extras, filename=d['outf_amp_phase_resp'])
 
 
-    ReST = ReST_temp3.format(params_str**d)
+    ReST = ReST_temp3.format(params_str=prnDict(extras['params'],braces=False),
+                            **d)
     image_dependent_html = docutils.core.publish_string(ReST, writer_name='html')
     self_contained_html = unicode(img2uri(image_dependent_html), 'utf8')
 
