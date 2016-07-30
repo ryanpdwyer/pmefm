@@ -1232,17 +1232,24 @@ def workup_df_plot(filename, outfile, fp, fc, tmin, tmax, saveh5=False, format_=
         fh.attrs['tmax'] = tmax
 
 
-@click.command()
+@click.command(help=
+"""
+FILENAME        HDF5 file to process                                            
+FP              filter pass frequency [Hz]                                      
+FC              filter cutoff frequency (< f_cantilever/4) [Hz]                 
+TMIN            minimum time to plot [s]                                        
+TMAX            maximum time to plot [s]
+""")
 @click.argument('filename', type=click.Path())
 @click.argument('fp', type=float)
 @click.argument('fc', type=float)
 @click.argument('tmin', type=float)
 @click.argument('tmax', type=float)
-@click.option('--outdir', type=str, default=None)
-@click.option('--basename', type=str, default=None)
-@click.option('--saveh5/--no-saveh5', default=False)
-@click.option('--format', type=str, default='BNC')
-@click.option('--group', type=str, default='data')
+@click.option('--outdir', type=str, default=None, help='subdirectory to save resulting files')
+@click.option('--basename', type=str, default=None, help='output filename (without extension)')
+@click.option('--saveh5/--no-saveh5', default=False, help='save worked up data as h5')
+@click.option('--format', type=str, default='BNC', help='HDF5 file structure: BNC or DAQ')
+@click.option('--group', type=str, default='data', help="group to workup: data, control, or '/'")
 def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename, saveh5, format, group):
     if basename is None:
         basename = os.path.splitext(filename)[0]
@@ -1279,8 +1286,6 @@ def report_adiabatic_control_phase_corr_cli(filename,
     except Exception as e:
         print(e)
         pass
-
-
 
 
 def align_and_mask(x, y, xi, xf):

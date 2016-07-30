@@ -126,7 +126,7 @@ def fir_weighted_lsq(weight_func, N):
 # phasing
 # Don't actually need time data
 
-def lock2(f0, fp, fc, fs, coeff_ratio=8, coeffs=None,
+def lock2(f0, fp, fc, fs, coeff_ratio=8.0, coeffs=None,
           window='blackman', print_response=True):
     """Create a gentle fir filter. Pass frequencies below fp, cutoff frequencies
     above fc, and gradually taper to 0 in between."""

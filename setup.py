@@ -26,7 +26,7 @@ setup(
     # Add requirements here. If the requirement is difficult to install,
     # add to docs/conf.py MAGIC_MOCK, and .travis.yml 'conda install ...'
     install_requires=['numpy', 'scipy', 'matplotlib', "Click", 'sigutils', 'tqdm',
-                      'bunch', 'bs4'],
+                      'bunch', 'beautifulsoup4'],
     tests_require=['nose'],
     test_suite='nose.collector',
     entry_points='''
