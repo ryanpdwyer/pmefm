@@ -838,7 +838,7 @@ model_fit_err = {
     'exp': ('single exponential', 'cumsum'),
     'exp_sq': ('single exponential', 'quadratic'),
      'exp_sq_no_control': ('single exponential', 'quadratic'),
-     'exp2_sq_nc': ('double exponential', 'quadratic')
+     'exp2_sq_nc': ('double exponential', 'quadratic'),
 }
 
 def update_models(model_code_dict=model_code_dict,

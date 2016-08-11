@@ -21,6 +21,7 @@ import sys
 import os
 from tqdm import tqdm
 import io
+import re
 import pathlib
 from scipy import interpolate
 from scipy import signal
@@ -1179,12 +1180,20 @@ def workup_df(fname_or_fh, fp, fc, tmin, tmax,
     return d
 
 
+def filter_numbers(list_):
+    return [x for x in list_ if re.findall(r'\d+', x) != []]
 
 
 def workup_df_plot(filename, outfile, fp, fc, tmin, tmax, saveh5=False, format_='BNC', subgr='data'):
     fh = h5py.File(filename, 'r')
     lis = []
-    for ds_name in tqdm(fh['ds']):
+
+    try:
+        ds = fh['ds'].value
+    except:
+        ds = filter_numbers(fh[subgr].keys())
+
+    for ds_name in tqdm(ds):
         if format_ == 'BNC':
             li = gr2lock(fh[subgr][ds_name], fp=fp, fc=fc)
         elif format_ == 'DAQ':
@@ -1300,10 +1309,15 @@ def align_and_mask(x, y, xi, xf):
     
     return np.array(x_aligned), np.array(y_aligned)
 
-def gr2t_df(gr, fp, fc, tf, pbar=None):
+def gr2t_df(gr, fp, fc, tf, pbar=None, format='BNC'):
     lis = []
     for ds in gr.values():
-        li = gr2lock(ds, fp=fp, fc=fc)
+        if format == 'BNC':
+            li = gr2lock(ds, fp=fp, fc=fc)
+        elif format == "DAQ":
+            li = gr2lock_daq(ds, fp=fp, fc=fc)
+        else:
+            raise ValueError()
         li.phase(tf=tf)
         lis.append(li)
         if pbar is not None:
@@ -1344,8 +1358,8 @@ class AverageTrEFM(object):
         return np.percentile(self.df, p, axis=0)
     
     @classmethod
-    def from_group(cls, gr, fp, fc, tf, t_initial, t_final, pbar=None):
-        ts, dfs = gr2t_df(gr, fp, fc, tf, pbar=pbar)
+    def from_group(cls, gr, fp, fc, tf, t_initial, t_final, pbar=None, format='BNC'):
+        ts, dfs = gr2t_df(gr, fp, fc, tf, pbar=pbar, format=format)
         
         return cls(ts, dfs, t_initial, t_final,)
 
