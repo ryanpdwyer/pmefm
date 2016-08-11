@@ -245,17 +245,18 @@ def measure_dA_dphi_fir(lock, li, tp, dA_dphi_before, dA_dphi_after):
 def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
                         fp, fc, fs_dec):
     tps = fh['tp'][:] * 0.001 # ms to s
-    tp_groups = fh['ds'][:]
+    groups = fh['data'].keys()
     df = pd.DataFrame(index=pd.MultiIndex.from_product(
-        (['data', 'control'], tp_groups), names=['expt', 'ds']))
+        (['data', 'control'], groups), names=['expt', 'ds']))
     lis = {}
     locks = {}
     i = 0
     for control_or_data in ('control', 'data'):
         lis[control_or_data] = []
         locks[control_or_data] = []
-        for (tp_group, tp) in tqdm(zip(tp_groups, tps)):
+        for tp_group in tqdm(groups):
             gr = fh[control_or_data][tp_group]
+            tp = gr.attrs['Adiabatic Parameters.tp [ms]'] * 0.001
             print_response = i == 0
             t1 = gr.attrs['Adiabatic Parameters.t1 [ms]'] * 0.001
             t2 = gr.attrs['Adiabatic Parameters.t2 [ms]'] * 0.001
