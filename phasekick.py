@@ -343,7 +343,7 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
 def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_af,
                         fp, fc, fs_dec):
     tps = fh['tp tip [s]'][:] # ms to s
-    tp_groups = fh['ds'][:]
+    groups = fh['data'].keys()
     df = pd.DataFrame(index=pd.MultiIndex.from_product(
         (['data', 'control'], tp_groups), names=['expt', 'ds']))
     lis = {}
@@ -352,7 +352,7 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
     for control_or_data in ('control', 'data'):
         lis[control_or_data] = []
         locks[control_or_data] = []
-        for (tp_group, tp) in tqdm(zip(tp_groups, tps)):
+        for tp_group in tqdm(groups):
             gr = fh[control_or_data][tp_group]
             print_response = i == 0
             try:
@@ -447,6 +447,119 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
              'locks': locks}
 
         return df, extras
+
+    except Exception as e:
+        print(e)
+        raise
+
+
+def workup_adiabatic_w_control_correct_phase3(fh, 
+                                                  fp, fc, fs_dec,
+                                                  w_before=None,
+                                                  w_after=None):
+    tp_groups = fh['data'].keys()
+    df = pd.DataFrame(index=pd.MultiIndex.from_product(
+        (['data', 'control'], tp_groups), names=['expt', 'ds']))
+    lis = {}
+    locks = {}
+    i = 0
+    dt = fh['data/0000/dt [s]'].value
+    fs = 1./dt
+    lock_fir = lockin.lock2(62e3, fp=fp, fc=fc, fs=fs, coeff_ratio=8,
+                                        window='blackman', print_response=False)
+
+    N_dec = int(fs/fs_dec)
+
+    for control_or_data in ('control', 'data'):
+        lis[control_or_data] = []
+        locks[control_or_data] = []
+        for tp_group in tqdm(tp_groups):
+            gr = fh[control_or_data][tp_group]
+            tp = gr.attrs['Adiabatic Parameters.tp [ms]'] * 0.001
+            print_response = i == 0
+
+            t1 = gr.attrs['Adiabatic Parameters.t1 [ms]'] * 0.001
+            t2 = gr.attrs['Adiabatic Parameters.t2 [ms]'] * 0.001
+            t0 = -(t1 + t2)
+            x = gr['cantilever-nm'][:]
+
+            lock, li = phasekick2.individual_phasekick2(x, dt, t0, t1, t2, tp, 
+                N_dec, lock_fir, w_before, w_after)
+            dphi = li.delta_phi
+
+            phi_at_tp, dA, dphi_tp_end = measure_dA_dphi(lock, li, tp,
+                dphi_weight_before=w_before, dphi_weight_after=w_after)
+            lis[control_or_data].append(li)
+            locks[control_or_data].append(lock)
+            i += 1
+
+            curr_index = (control_or_data, tp_group)
+            df.loc[curr_index, 'tp'] = tp
+            df.loc[curr_index, 'dphi [cyc]'] = dphi/(2*np.pi)
+            df.loc[curr_index, 'f0 [Hz]'] = li.fc0
+            df.loc[curr_index, 'df_dV [Hz]'] = li.f1 - li.fc0
+            df.loc[curr_index, 'df2_dV [Hz]'] = li.f2 - li.fc0
+            df.loc[curr_index, 'dA [nm]'] = dA
+            df.loc[curr_index, 'dphi_tp_end [cyc]'] = dphi_tp_end
+            df.loc[curr_index, 'phi_at_tp [rad]'] = phi_at_tp
+            df.loc[curr_index, 'relative time [s]'] = gr['relative time [s]'].value
+
+    try:
+        df.sort_index(inplace=True)
+        print(df)
+
+        df_clean = df.dropna()
+
+        control = df_clean.xs('control')
+        data = df_clean.xs('data')
+
+        popt_phi, pcov_phi = optimize.curve_fit(offset_cos,
+            control['phi_at_tp [rad]'], control['dphi_tp_end [cyc]'])
+        popt_A, pcov_A = optimize.curve_fit(offset_cos,
+            control['phi_at_tp [rad]'], control['dA [nm]'])
+
+        df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
+                                - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
+
+        df_clean = df.dropna()
+        df_clean.sort_values('tp', inplace=True)
+        control = df_clean.xs('control')
+        data = df_clean.xs('data')
+
+
+        popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
+        popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
+
+        # Extra information
+        filename = fh.filename
+        extras = {'popt_phi': popt_phi,
+             'pcov_phi': pcov_phi,
+             'pdiag_phi': np.diagonal(pcov_phi)**0.5,
+             'popt_A': popt_A,
+             'pcov_A': pcov_A,
+             'pdiag_A': np.diagonal(pcov_A)**0.5,
+             'popt_phase_corr': popt_phase_corr,
+             'pcov_phase_corr': pcov_phase_corr,
+             'pdiag_phase_corr': np.diagonal(pcov_phase_corr)**0.5,
+             'popt_phase': popt_phase,
+             'pcov_phase': pcov_phase,
+             'pdiag_phase': np.diagonal(pcov_phase)**0.5,
+              'params':
+              {
+              'filename': filename,
+              'w_before': w_after,
+             'w_after': w_before,
+             'fp': fp,
+             'fc': fc,
+             'fs_dec': fs_dec,
+             },
+             'filename': filename,
+             'file_attrs_str': prnDict(dict(fh.attrs.items()), braces=False),
+             'dataset_attrs_str': prnDict(dict(fh['data/0000'].attrs.items()), braces=False),
+             'lis': lis,
+             'locks': locks}
+
+        return df_clean, extras
 
     except Exception as e:
         print(e)
