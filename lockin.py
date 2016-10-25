@@ -14,9 +14,18 @@ import click
 import h5py
 import sys
 import pathlib
+import scipy
+from distutils.version import LooseVersion
 from scipy.optimize import curve_fit
 from scipy import interpolate
-from scipy.signal.signaltools import _centered, _next_regular
+from scipy.signal.signaltools import _centered
+
+if LooseVersion(scipy.__version__) > LooseVersion("0.18"):
+    from scipy import fftpack
+    next_fast_len = fftpack.next_fast_len
+else:
+    from scipy.signal import signaltools
+    next_fast_len = signaltools._next_regular
 
 # Inputs: t, x
 # Cantilever amplitude, phase, frequency
@@ -63,7 +72,7 @@ def freq_from_fft(sig, fs):
 
     """
     # Compute Fourier transform of windowed signal
-    N = _next_regular(sig.size)
+    N = next_fast_len(sig.size)
     windowed = sig * signal.blackmanharris(len(sig))
     f = np.fft.rfft(windowed, N)
 
@@ -476,6 +485,7 @@ or provide more data.""".format(coeffs, t.size))
         self.f0_dec_direct = self.f0 + mb[0] / (2*np.pi)
 
     def absolute_phase(self, mask, guess=0.0):
+        """Perform a curve fit """
         phi = self.phi[mask] + self.t[mask]*2*np.pi*self.f0corr
         popt, pcov = curve_fit(lambda phi, phi0:
             self.A[mask]*np.cos(phi+phi0), phi, self.x[mask],

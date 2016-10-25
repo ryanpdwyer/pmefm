@@ -7,6 +7,7 @@ from __future__ import division, absolute_import, print_function
 import numpy as np
 from scipy import signal
 from scipy.special import j0, j1, jn, jn_zeros
+from collections import OrderedDict
 from scipy import optimize
 from matplotlib import gridspec
 import matplotlib as mpl
@@ -101,7 +102,7 @@ require: odict() # an ordered dict, if you want the keys sorted.
             dic = aDict.copy()
             keys = dic.keys()
             keys.sort()
-            aDict = odict()
+            aDict = OrderedDict()
             for k in keys:
                 aDict[k] = dic[k]
 
@@ -157,11 +158,13 @@ def measure_dA_dphi(lock, li, tp, t_fit=2e-3,
         N_b = int(round(fs*t_fit))
     else:
         N_b = len(dphi_weight_before)
+        t_fit = N_b / fs
 
     if dphi_weight_after is None:
         N_a = int(round(fs*t_fit))
     else:
         N_a = len(dphi_weight_after)
+        t_fit = N_a / fs
 
     i_tp = np.arange(lock.t.size)[lock.t < tp][-1]
     # Use 20 data points for interpolating; this is slightly over one
@@ -1187,6 +1190,11 @@ def report_adiabatic_control_phase_corr3(df, extras, basename=None, outdir=None)
         except:
             pass
 
+
+def calc_t2_tp(half_periods, N2even):
+    t2 = np.sum(gr["half periods [s]"][:N2even+1])
+    tp = np.sum(gr["half periods [s]"][N2even+1:])
+    return t2, tp
 
 def gr2t(gr):
     half_periods = gr["half periods [s]"][:]

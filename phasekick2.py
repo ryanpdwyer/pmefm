@@ -99,7 +99,8 @@ def individual_phasekick2(y, dt, t0, t1, t2, tp, N_dec, lockin_fir,
         tp
         lockin_fir (chosen by fp, fc)
         N_dec (chosen by int(fs/fs_dec))
-        smooth_fir (chosen by opt. filt)
+        weight_before (chosen by opt. filter)
+        weight_after (chosen by opt. filter)
     """
 
     fs = 1. / dt
