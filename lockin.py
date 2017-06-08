@@ -138,7 +138,10 @@ def fir_weighted_lsq(weight_func, N):
 def lock2(f0, fp, fc, fs, coeff_ratio=8.0, coeffs=None,
           window='blackman', print_response=True):
     """Create a gentle fir filter. Pass frequencies below fp, cutoff frequencies
-    above fc, and gradually taper to 0 in between."""
+    above fc, and gradually taper to 0 in between.
+
+    These filters have a smoother time domain response than filters created
+    with lock."""
 
     # Convert to digital frequencies, normalizing f_nyq to 1,
     # as requested by scipy.signal.firwin2
@@ -193,7 +196,8 @@ class LockIn(object):
     `lock` or `lock2`, or a custom FIR filter can be used by directly
     calling `run`. After generating the complex lock-in output, the lock-in
     can be phased by running `phase`, or `autophase`.
-    After phasing, the lock-in output channels X, Y, in and out of phase 
+    After phasing, the lock-in output channels are X, the in-phase channel and
+    Y, the out-of-phase channel.
 
     Parameters
     ----------
@@ -203,6 +207,22 @@ class LockIn(object):
         Input signal array
     fs: float
         Sampling rate
+
+
+    Example
+    -------
+
+    fs = 1000
+    t = np.arange(1000)/fs
+    A = 1 - 0.1 * t
+    f = 80 + 0.1 * t
+    x = A * np.sin(np.cumsum(f)*2*3.14159/fs)
+
+    li = lockin.LockIn(t, x, fs)
+    li.lock(20.0)
+    li.phase()
+
+    li('t') # Shortcut for accessing masked version of the signal.
 
     """
     def __init__(self, t, x, fs):
@@ -246,6 +266,7 @@ class LockIn(object):
 
         t = self.t
         fs = self.fs
+
         if f0 is None:
             self.f0 = f0 = self.f0_est
         else:
@@ -281,6 +302,8 @@ or provide more data.""".format(coeffs, t.size))
 
         if f0 is None:
             self.f0 = f0 = self.f0_est
+        else:
+            self.f0 = f0
 
         if fp is None:
             fp = fp_ratio * f0
@@ -294,13 +317,14 @@ or provide more data.""".format(coeffs, t.size))
         if coeffs > self.x.size:
             raise ValueError(
     """No valid output when 'coeffs' > t.size (coeffs: {}, t.size: {}).
-    Reduce coeffs by increasing bw, bw_ratio, or decreasing coeff_ratio,
+    Reduce coeffs by increasing bw, bw_ratio, decreasing coeff_ratio,
     or provide more data.""".format(coeffs, t.size))
 
 
         self.run(f0=f0)
 
     def lock_butter(self, N, f3dB, t_exclude=0, f0=None, print_response=True):
+        """Butterworth filter the lock-in amplifier output"""
         t = self.t
         fs = self.fs
         nyq = fs / 2.

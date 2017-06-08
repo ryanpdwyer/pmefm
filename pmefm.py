@@ -13,12 +13,50 @@ import sigutils
 from scipy.signal.signaltools import _centered
 
 
+def align_labels(axes_list,axis='y',align=None):
+    if align is None:
+        align = 'l' if axis == 'y' else 'b'
+    yx,xy = [],[]
+    for ax in axes_list:
+        yx.append(ax.yaxis.label.get_position()[0])
+        xy.append(ax.xaxis.label.get_position()[1])
+
+    if axis == 'x':
+        if align in ('t','top'):
+            lim = min(xy)
+        elif align in ('b','bottom'):
+            lim = max(xy)
+    else:
+        if align in ('l','left'):
+            lim = min(yx)
+        elif align in ('r','right'):
+            lim = max(yx)
+
+    if align in ('t','b','top','bottom'):
+        for ax in axes_list:
+            t = ax.xaxis.label.get_transform()
+            x,y = ax.xaxis.label.get_position()
+            ax.xaxis.set_label_coords(x,lim,t)
+    else:
+        for ax in axes_list:
+            t = ax.yaxis.label.get_transform()
+            x,y = ax.yaxis.label.get_position()
+            ax.yaxis.set_label_coords(lim,y,t)
+
 def _fit_phase(t, phase, amp, phase_reversals=True):
     if phase_reversals:
         dphi_max = np.pi/2
     else:
         dphi_max = np.pi
     f = lambda x: np.sum(amp**2*abs((abs(abs(phase - (x[0]*t + x[1])) - dphi_max) - dphi_max))**2)
+    return f
+
+def _fit_phase_sin(t, phase, amp, phase_reversals=True):
+    if phase_reversals:
+        dphi_max = np.pi/2
+    else:
+        dphi_max = np.pi
+    f = lambda x: np.sum(amp**2*np.sin(abs(abs(phase - (x[0]*t + x[1])) - dphi_max) - dphi_max)**2)
     return f
 
 
@@ -338,15 +376,26 @@ class PMEFMEx(object):
 
     linfit_phase = fit_phase
 
-    def auto_phase(self, x0=np.array([0., 0.])):
+    def auto_phase(self, x0=np.array([0., 0.]), invert=False, iprint=1):
         """"""
         m = self.m
         self.mb = optimize.fmin_slsqp(_fit_phase(self.t[m],
                                                  self.phi_lock_phase[m],
                                                  self.phi_lock_a[m]),
-                                      x0,)
+                                      x0, iprint=iprint)
+        if invert:
+            self.mb = self.mb + np.array([0., np.pi])
+        self.phase = np.polyval(self.mb, self.t)
 
-
+    def auto_phase_sin(self, x0=np.array([0., 0.]), invert=False, iprint=1):
+        """"""
+        m = self.m
+        self.mb = optimize.fmin_slsqp(_fit_phase_sin(self.t[m],
+                                                 self.phi_lock_phase[m],
+                                                 self.phi_lock_a[m]),
+                                      x0, iprint=iprint)
+        if invert:
+            self.mb = self.mb + np.array([0., np.pi])
         self.phase = np.polyval(self.mb, self.t)
 
 
@@ -380,9 +429,12 @@ class PMEFMEx(object):
 
     def output(self):
 
-        self.V_ac = np.real(np.exp(-1j * self.phase) * self.V_lock)
+        self.Z = np.exp(-1j * self.phase) * self.V_lock
 
-        self.E_dc = -1 * np.diff(self.V_dc) / self.dx
+        self.V_ac = self.Z.real
+        self.V_err = self.Z.imag
+
+        self.E_dc = -1 * np.gradient(self.V_dc) / self.dx
         self.E_mod = self.V_ac / self.x_m
 
     def plot(self, x, y, scale='linear', comp='abs', xlim=None, ylim=None,
