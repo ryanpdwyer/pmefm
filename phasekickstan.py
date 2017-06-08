@@ -1207,7 +1207,7 @@ class PlotStanModels(object):
         if fname is not None:
             fig.tight_layout()
             fig.savefig(fname)
-            fig.close()
+            plt.close('all')
 
         return fig, ax
 
@@ -1227,7 +1227,7 @@ class PlotStanModels(object):
         if fname is not None:
             fig.tight_layout()
             fig.savefig(fname)
-            fig.close()
+            plt.close('all')
 
         return fig, ax
 
@@ -1243,7 +1243,7 @@ class PlotStanModels(object):
         if fname is not None:
             fig.tight_layout()
             fig.savefig(fname)
-            fig.close()
+            plt.close('all')
 
         return fig, ax
 
@@ -1258,7 +1258,7 @@ class PlotStanModels(object):
         if fname is not None:
             fig.tight_layout()
             fig.savefig(fname)
-            fig.close()
+            plt.close('all')
 
         return fig, ax
 
@@ -1278,7 +1278,7 @@ class PlotStanModels(object):
         if fname is not None:
             fig.tight_layout()
             fig.savefig(fname)
-            fig.close()
+            plt.close('all')
 
         return fig, ax
 
@@ -1296,7 +1296,7 @@ class PlotStanModels(object):
         if fname is not None:
             fig.tight_layout()
             fig.savefig(fname)
-            fig.close()
+            plt.close('all')
 
         return fig, ax
 
@@ -1323,7 +1323,7 @@ class PlotStanModels(object):
 
             if filename is not None:
                 fig.savefig(filename)
-                fig.close()
+                plt.close('all')
 
 
         return figaxes
