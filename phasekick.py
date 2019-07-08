@@ -345,10 +345,11 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
 
 def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_af,
                         fp, fc, fs_dec):
-    tps = fh['tp tip [s]'][:] # ms to s
-    groups = fh['data'].keys()
+    tps = fh['tp tip [s]'][:] 
+    groups = fh['ds'][:] # This might not be right, because I may be screwing up
+                        # which dataset is which when things are randomized?
     df = pd.DataFrame(index=pd.MultiIndex.from_product(
-        (['data', 'control'], tp_groups), names=['expt', 'ds']))
+        (['data', 'control'], groups), names=['expt', 'ds']))
     lis = {}
     locks = {}
     i = 0
