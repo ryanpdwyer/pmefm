@@ -1084,6 +1084,42 @@ Zero time
 
 .. image:: {outf_zero_time}
 
+
+Further analysis
+================
+
+To repeat this analysis, use the command
+
+::
+
+    adiabatic_report {cli_command}
+
+To replicate this analysis in a Jupyter notebook, open the notebook and run the following,
+
+::
+    
+    %matplotlib inline
+    from __future__ import division
+    import numpy as np
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    import h5py
+    import phasekick as pk
+    with h5py.File('{filename}', 'r') as fh:
+        {jupyter_command}
+
+
+To reproduce the plots, run any or all of the commands below:
+
+:: 
+
+    pk.plot_zero_time(extras)
+    pk.plot_phasekick(df, extras,)
+    pk.plot_phasekick_corrected(df, extras)
+    pk.plot_amplitudes(extras)
+    pk.plot_df0vs_t(df)
+    pk.plot_dA_dphi_vs_t(df, extras)
 """
 
 def report_adiabatic_control_phase_corr(filename,
@@ -1111,7 +1147,24 @@ def report_adiabatic_control_phase_corr(filename,
 
         d.update(extras)
 
+        if outdir is None:
+            _outdir = ''
+        else:
+            _outdir = "--outdir {0}".format(outdir)
 
+        d['cli_command'] = "--format {format} --basename {basename} {_outdir} --tbf {T_bf} --taf {T_af} {filename} {fp} {fc} {T_before} {T_after}".format(**locals())
+
+        if format == 'BNC':
+            d['jupyter_command'] = """df, extras = pk.workup_adiabatic_w_control_correct_phase_bnc(fh,
+                        T_before={T_before}, T_after={T_after}, T_bf={T_bf}, T_af={T_af}, fp={fp},
+                        fc={fc}, fs_dec={fs_dec})""".format(**locals())
+        else:
+            d['jupyter_command'] = """df, extras = pk.workup_adiabatic_w_control_correct_phase(fh,
+                        T_before={T_before}, T_after={T_after}, T_bf={T_bf}, T_af={T_af}, fp={fp},
+                        fc={fc}, fs_dec={fs_dec})""".format(**locals())
+
+        d['filename'] = filename
+        # All of the plots
         plot_zero_time(extras, filename=d['outf_zero_time'])
         plot_phasekick(df, extras, filename=d['outf_phasekick'])
         plot_phasekick_corrected(df, extras,
@@ -1121,7 +1174,7 @@ def report_adiabatic_control_phase_corr(filename,
         plot_dA_dphi_vs_t(df, extras, filename=d['outf_amp_phase_resp'])
 
 
-    ReST = ReST_temp3.format(params_str=prnDict(extras['params'],braces=False),
+    ReST = ReST_temp3.format(params_str=prnDict(extras['params'], braces=False),
                             **d)
     image_dependent_html = docutils.core.publish_string(ReST, writer_name='html')
     self_contained_html = unicode(img2uri(image_dependent_html), 'utf8')
@@ -1485,9 +1538,3 @@ class AverageTrEFM(object):
         ts, dfs = gr2t_df(gr, fp, fc, tf, pbar=pbar, format=format)
         
         return cls(ts, dfs, t_initial, t_final,)
-
-
-
-
-
-    
