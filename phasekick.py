@@ -37,6 +37,7 @@ import docutils.core
 import base64
 import bs4
 
+
 def expon_weights(tau, fs, coeff_ratio=5.):
     scale = tau * fs
     i = np.arange(int(round(scale * coeff_ratio)))
@@ -49,6 +50,7 @@ def slope_filt(N):
 
 def percentile_func(x):
     return lambda p: np.percentile(x, p, axis=0)
+
 
 def masklh(x, l=None, r=None):
     if l is None:
@@ -78,7 +80,7 @@ sortKey: set to 1 if want keys sorted;
 keyAlign: either 'l' or 'r', for left, right align, respectively.
 keyPrefix, keySuffix, valuePrefix, valueSuffix: The prefix and
    suffix to wrap the keys or values. Good for formatting them
-   for html document(for example, keyPrefix='<b>', keySuffix='</b>'). 
+   for html document(for example, keyPrefix='<b>', keySuffix='</b>').
    Note: The keys will be padded with spaces to have them
          equally-wide. The pre- and suffix will be added OUTSIDE
          the entire width.
@@ -91,13 +93,13 @@ br: determine the carriage return. If html, it is suggested to set
 version: 04b52
 author : Runsun Pan
 require: odict() # an ordered dict, if you want the keys sorted.
-         Dave Benjamin 
+         Dave Benjamin
          http://aspn.activestate.com/ASPN/Cookbook/Python/Recipe/161403
     '''
-   
+
     if aDict:
 
-        #------------------------------ sort key
+        # ------------------------------ sort key
         if sortKey:
             dic = aDict.copy()
             keys = dic.keys()
@@ -106,37 +108,37 @@ require: odict() # an ordered dict, if you want the keys sorted.
             for k in keys:
                 aDict[k] = dic[k]
 
-        #------------------- wrap keys with ' ' (quotes) if str
+        # ------------------- wrap keys with ' ' (quotes) if str
         tmp = ['{']
         ks = [type(x)==str and "'%s'"%x or x for x in aDict.keys()]
 
-        #------------------- wrap values with ' ' (quotes) if str
-        vs = [type(x)==str and "'%s'"%x or x for x in aDict.values()] 
+        # ------------------- wrap values with ' ' (quotes) if str
+        vs = [type(x)==str and "'%s'"%x or x for x in aDict.values()]
 
         maxKeyLen = max([len(str(x)) for x in ks])
 
         for i in range(len(ks)):
 
-            #-------------------------- Adjust key width
+            # -------------------------- Adjust key width
             k = {1            : str(ks[i]).ljust(maxKeyLen),
                  keyAlign=='r': str(ks[i]).rjust(maxKeyLen) }[1]
 
             v = vs[i]
             tmp.append(' '* indent+ '%s%s%s:%s%s%s,' %(
                         keyPrefix, k, keySuffix,
-                        valuePrefix,v,valueSuffix))
+                        valuePrefix, v, valueSuffix))
 
-        tmp[-1] = tmp[-1][:-1] # remove the ',' in the last item
+        tmp[-1] = tmp[-1][:-1]  # remove the ',' in the last item
         tmp.append('}')
 
         if leftMargin:
-          tmp = [ ' '*leftMargin + x for x in tmp ]
+            tmp = [' '*leftMargin + x for x in tmp ]
 
         if not braces:
             tmp = tmp[5:-2]
 
         if html:
-            return '<code>%s</code>' %br.join(tmp).replace(' ','&nbsp;')
+            return '<code>%s</code>' %br.join(tmp).replace(' ', '&nbsp;')
         else:
             return br.join(tmp)
     else:
@@ -146,8 +148,10 @@ require: odict() # an ordered dict, if you want the keys sorted.
 def phase_step(t, tau, df):
     return df*t + df*tau*(np.exp(-t/tau)-1)
 
+
 def offset_cos(phi, A, phi0, b):
     return A*np.cos(phi + phi0) + b
+
 
 def measure_dA_dphi(lock, li, tp, t_fit=2e-3,
                 dphi_weight_before=None,
@@ -202,6 +206,62 @@ def measure_dA_dphi(lock, li, tp, t_fit=2e-3,
     return phi0, dA, dphi
 
 
+def measure_dA_dphi_A(lock, li, tp, t_fit=2e-3,
+                dphi_weight_before=None,
+                dphi_weight_after=None):
+    """Correct for impulsive phase shift at end of pulse time."""
+    fs = li.fs
+    if dphi_weight_before is None:
+        N_b = int(round(fs*t_fit))
+    else:
+        N_b = len(dphi_weight_before)
+        t_fit = N_b / fs
+
+    if dphi_weight_after is None:
+        N_a = int(round(fs*t_fit))
+    else:
+        N_a = len(dphi_weight_after)
+        t_fit = N_a / fs
+
+    i_tp = np.arange(lock.t.size)[lock.t < tp][-1]
+    # Use 20 data points for interpolating; this is slightly over one
+    # cycle of our oscillation
+    m = np.arange(-10, 11) + i_tp
+    # This interpolator worked reasonably for similar, low-frequency sine waves
+    interp = interpolate.KroghInterpolator(lock.t[m], lock.x[m])
+    x0 = interp(tp)[()]
+    # We only need t0 approximately; the precise value of f0 doesn't matter very much.
+    t0 = li.t[(li.t < tp)][-1]
+    f0 = li.df[(li.t < tp)][-1] + li.f0(t0)
+    v0 = interp.derivative(tp)[()]
+    x2 = v0 / (2*np.pi*f0)
+
+    phi0 = np.arctan2(-x2, x0)
+    A0 = np.abs(x0 - x2*1j)
+
+    ml = masklh(li.t, tp-t_fit, tp)
+    mr = masklh(li.t, tp, tp + t_fit)
+
+    ml_phi = np.arange(li.t.size)[li.t <= tp][-N_b:]
+    mr_phi = np.arange(li.t.size)[li.t > tp][:N_a]
+
+    A = abs(li.z_out)
+    phi = np.unwrap(np.angle(li.z_out))/(2*np.pi)
+
+    mbAl = np.polyfit(li.t[ml], A[ml], 1)
+    mbAr = np.polyfit(li.t[mr], A[mr], 1)
+
+    mb_phi_l = np.polyfit(li.t[ml_phi], phi[ml_phi], 1, w=dphi_weight_before)
+    mb_phi_r = np.polyfit(li.t[mr_phi], phi[mr_phi], 1, w=dphi_weight_after)
+
+    dA = np.polyval(mbAr, tp) - np.polyval(mbAl, tp)
+    dphi = np.polyval(mb_phi_r, tp) - np.polyval(mb_phi_l, tp)
+
+    return phi0, dA, dphi, A0
+
+# TODO: fix missing t_fit variable
+
+
 def measure_dA_dphi_fir(lock, li, tp, dA_dphi_before, dA_dphi_after):
     """Correct for impulsive phase shift at end of pulse time."""
 
@@ -245,9 +305,9 @@ def measure_dA_dphi_fir(lock, li, tp, dA_dphi_before, dA_dphi_after):
 
 # Logical way to represent this information is a pandas MultiIndex.
 
+
 def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
                         fp, fc, fs_dec):
-    tps = fh['tp'][:] * 0.001 # ms to s
     groups = fh['data'].keys()
     df = pd.DataFrame(index=pd.MultiIndex.from_product(
         (['data', 'control'], groups), names=['expt', 'ds']))
@@ -261,7 +321,6 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
             gr = fh[control_or_data][tp_group]
             tp = gr.attrs['Adiabatic Parameters.tp [ms]'] * 0.001
             print_response = i == 0
-            t1 = gr.attrs['Adiabatic Parameters.t1 [ms]'] * 0.001
             t2 = gr.attrs['Adiabatic Parameters.t2 [ms]'] * 0.001
             lock = lockin.adiabatic2lockin(gr)
             lock.lock2(fp=fp, fc=fc, print_response=False)
@@ -273,7 +332,7 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
                 gr, tp, T_before, T_after,
                 T_bf, T_af, fp, fc, fs_dec, print_response=print_response)
 
-            phi_at_tp, dA, dphi_tp_end = measure_dA_dphi(lock, li, tp)
+            phi_at_tp, dA, dphi_tp_end, A_at_tp = measure_dA_dphi_A(lock, li, tp)
             lis[control_or_data].append(li)
             locks[control_or_data].append(lock)
             i += 1
@@ -286,6 +345,7 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
             df.loc[curr_index, 'dA [nm]'] = dA
             df.loc[curr_index, 'dphi_tp_end [cyc]'] = dphi_tp_end
             df.loc[curr_index, 'phi_at_tp [rad]'] = phi_at_tp
+            df.loc[curr_index, 'A_at_tp [nm]'] = A_at_tp
             df.loc[curr_index, 'relative time [s]'] = gr['relative time [s]'].value
 
     sys.stdout.write('\n')
@@ -304,7 +364,6 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
 
     control = df.xs('control')
     data = df.xs('data')
-
 
     popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
     popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
@@ -375,7 +434,7 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
                     T_bf, T_af, fp, fc, fs_dec, print_response=print_response,
                     t0=t0)
 
-                phi_at_tp, dA, dphi_tp_end = measure_dA_dphi(lock, li, tp)
+                phi_at_tp, dA, dphi_tp_end, A_at_tp = measure_dA_dphi_A(lock, li, tp)
                 lis[control_or_data].append(li)
                 locks[control_or_data].append(lock)
                 i += 1
@@ -388,7 +447,9 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
                 df.loc[curr_index, 'dA [nm]'] = dA
                 df.loc[curr_index, 'dphi_tp_end [cyc]'] = dphi_tp_end
                 df.loc[curr_index, 'phi_at_tp [rad]'] = phi_at_tp
+                df.loc[curr_index, 'A_at_tp [nm]'] = A_at_tp
                 df.loc[curr_index, 'relative time [s]'] = gr['relative time [s]'].value
+
             except Exception as e:
                 print(e)
                 pass
