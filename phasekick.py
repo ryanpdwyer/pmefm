@@ -342,12 +342,10 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
     return df, extras
 
 
-
 def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_af,
-                        fp, fc, fs_dec):
-    tps = fh['tp tip [s]'][:] 
-    groups = fh['ds'][:] # This might not be right, because I may be screwing up
-                        # which dataset is which when things are randomized?
+                                                    fp, fc, fs_dec):
+    groups = fh['ds'][:] #  This might not be right, because I may be screwing up
+                         #  which dataset is which when things are randomized?
     df = pd.DataFrame(index=pd.MultiIndex.from_product(
         (['data', 'control'], groups), names=['expt', 'ds']))
     lis = {}
@@ -362,12 +360,10 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
             try:
                 N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
                 t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
+                # Add the half periods to determine the exact length of t2
                 t2 = np.sum(gr["half periods [s]"][:N2even+1])
                 tp = np.sum(gr.attrs["Abrupt BNC565 CantClk.tp tip [s]"])
                 t0 = -(t1 + t2)
-                x = gr['cantilever-nm'][:]
-                dt = fh['data/0000/dt [s]'].value
-                fs = 1. / dt
                 lock = lockin.adiabatic2lockin(gr, t0=t0)
                 lock.lock2(fp=fp, fc=fc, print_response=False)
                 lock.phase(tf=-t2)
@@ -386,7 +382,7 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
 
                 curr_index = (control_or_data, tp_group)
                 df.loc[curr_index, 'tp'] = tp
-                df.loc[curr_index, 'dphi [cyc]'] = dphi/(2*np.pi)
+                df.loc[curr_index, 'dphi [cyc]'] = dphi / (2*np.pi)
                 df.loc[curr_index, 'f0 [Hz]'] = f0_V0
                 df.loc[curr_index, 'df_dV [Hz]'] = f0_V1 - f0_V0
                 df.loc[curr_index, 'dA [nm]'] = dA
@@ -530,7 +526,6 @@ def workup_adiabatic_w_control_correct_phase3(fh,
         control = df_clean.xs('control')
         data = df_clean.xs('data')
 
-
         popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
         popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
 
@@ -579,7 +574,7 @@ def fir_tau(tau, fs, ratio=None, N=None, T=None):
         N = int(fs*tau*ratio)
     else:
         raise ValueError("Must specify N or T")
-    
+
     t = np.arange(N)/fs
     h_raw = np.exp(-t/tau)
     return h_raw / sum(h_raw)
@@ -724,7 +719,7 @@ def workup_adiabatic_w_control_correct_phase_bnc3(fh,
         locks[control_or_data] = []
         for (tp_group, tp) in tqdm(zip(tp_groups, tps)):
             gr = fh[control_or_data][tp_group]
-            print_response = i == 0
+            # print_response = i == 0
 
             N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
             t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
@@ -776,7 +771,6 @@ def workup_adiabatic_w_control_correct_phase_bnc3(fh,
         control = df_clean.xs('control')
         data = df_clean.xs('data')
 
-
         popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
         popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
 
@@ -798,10 +792,10 @@ def workup_adiabatic_w_control_correct_phase_bnc3(fh,
               {
               'filename': filename,
               'w_before': w_after,
-             'w_after': w_before,
-             'fp': fp,
-             'fc': fc,
-             'fs_dec': fs_dec,
+              'w_after': w_before,
+              'fp': fp,
+              'fc': fc,
+              'fs_dec': fs_dec,
              },
              'filename': filename,
              'file_attrs_str': prnDict(dict(fh.attrs.items()), braces=False),
@@ -814,7 +808,6 @@ def workup_adiabatic_w_control_correct_phase_bnc3(fh,
     except Exception as e:
         print(e)
         raise
-
 
 
 # Plot zero time
@@ -961,7 +954,6 @@ def plot_phasekick_corrected(df, extras, figax=None, rcParams={}, filename=None)
         units = 'mcyc'
         scale = 1e3
 
-
     ax.plot(control.tp*1e3, control['dphi_corrected [cyc]']*scale, 'g.')
     ax.plot(data.tp*1e3, data['dphi_corrected [cyc]']*scale, 'b.')
     ax.plot(data.tp*1e3, phase_step(data.tp, *extras['popt_phase_corr'])*scale)
@@ -984,6 +976,7 @@ def file_extension(filename):
     .vimrc              (empty string)"""
 
     return os.path.splitext(filename)[1][1:]
+
 
 def img2uri(html_text):
     """Convert any relative reference img tags in html_input to inline data uri.
