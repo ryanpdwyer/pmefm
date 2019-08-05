@@ -531,7 +531,6 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
         df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
                                 - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
 
-        df['dphi_corrected2 [cyc]'] = (df['dphi [cyc]'] - df['A']
 
         df_clean = df.dropna()
         control = df_clean.xs('control')
