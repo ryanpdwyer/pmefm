@@ -666,7 +666,7 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
     t = np.arange(y.size) * dt + t0
     li = LockIn(t, y, fs)
     li.lock2(fp=fp, fc=fc, print_response=print_response)
-    tedge = li.fir.size * dt / 2
+    tedge = (li.fir.size - 1) * dt / 2
     li.phase(ti=-T_bf+T_before_offset, tf=T_before_offset)
     f1 = li.f0corr
     phi0 = -li.phi[0]
@@ -678,6 +678,7 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
     def f_var(t):
         return np.where(t > tp, f2, f1)
 
+
     lockstate = FIRStateLockVarF(li.fir, dec, f_var, phi0, t0=t0, fs=fs)
     lockstate.filt(y)
     lockstate.dphi = np.unwrap(np.angle(lockstate.z_out))
@@ -686,8 +687,8 @@ def adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
 
     lockstate.tp = tp
     lockstate.t = t = lockstate.get_t()
-    lockstate.delta_phi = (np.mean(lockstate.dphi[(t >= tp) & (t < (tp + T_after))]) - 
-                            np.mean(lockstate.dphi[(t >= -T_before) & (t < 0)])
+    lockstate.delta_phi = (np.mean(lockstate.dphi[(t >= (tp + tedge)) & (t < (tp + T_after))]) - 
+                            np.mean(lockstate.dphi[(t >= -T_before) & (t < -tedge)])
                            )
 
     return lockstate
@@ -713,6 +714,7 @@ def plot_phasekick_control(df):
     ax.set_ylabel('phase shift [cyc.]')
     return fig, ax
 
+
 def delta_phi_group(subgr, tp, T_before, T_after, T_bf=0.002, T_af=0.002,
                     fp=1000, fc=4000, fs_dec=16000, T_before_offset=0., print_response=True, t0=None):
     y = subgr['cantilever-nm'][:]
@@ -722,6 +724,7 @@ def delta_phi_group(subgr, tp, T_before, T_after, T_bf=0.002, T_af=0.002,
     lockstate = adiabatic_phasekick(y, dt, tp, t0, T_before, T_after, T_bf, T_af,
                 fp, fc, fs_dec, T_before_offset, print_response)
     return lockstate.delta_phi, lockstate
+
 
 def workup_adiabatic_w_control(fh, T_before, T_after, T_bf=0.025, T_af=0.04,
                         fp=1000, fc=4000, fs_dec=16000):

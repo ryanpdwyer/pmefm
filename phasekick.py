@@ -262,6 +262,64 @@ def measure_dA_dphi_A(lock, li, tp, t_fit=2e-3,
 # TODO: fix missing t_fit variable
 
 
+def measure_dA_dphi_A_2019(lock, li, tp, t_fit=1.5e-3,
+                dphi_weight_before=None,
+                dphi_weight_after=None):
+    """Correct for impulsive phase shift at end of pulse time."""
+    t_fit_A = t_fit
+    t_fit_phi = t_fit
+    fs = li.fs/li.dec
+    dt_orig = 1.0/li.fs
+    tedge = (li.fir.size - 1) * dt_orig / 2
+    if dphi_weight_before is None:
+        N_b = int(round(fs*t_fit_phi))
+    else:
+        N_b = len(dphi_weight_before)
+        t_fit = N_b / fs
+
+    if dphi_weight_after is None:
+        N_a = int(round(fs*t_fit_phi))
+    else:
+        N_a = len(dphi_weight_after)
+        t_fit = N_a / fs
+
+    i_tp = np.arange(lock.t.size)[lock.t < tp][-1]
+    # Use 20 data points for interpolating; this is slightly over one
+    # cycle of our oscillation
+    m = np.arange(-10, 11) + i_tp
+    # This interpolator worked reasonably for similar, low-frequency sine waves
+    interp = interpolate.KroghInterpolator(lock.t[m], lock.x[m])
+    x0 = interp(tp)[()]
+    # We only need t0 approximately; the precise value of f0 doesn't matter very much.
+    t0 = li.t[(li.t < tp)][-1]
+    f0 = li.df[(li.t < tp)][-1] + li.f0(t0)
+    v0 = interp.derivative(tp)[()]
+    x2 = v0 / (2*np.pi*f0)
+
+    phi0 = np.arctan2(-x2, x0)
+    A0 = np.abs(x0 - x2*1j)
+
+    ml = masklh(li.t, tp-t_fit_A, tp-tedge)
+    mr = masklh(li.t, tp+tedge, tp + t_fit_A)
+
+    ml_phi = np.arange(li.t.size)[li.t <= (tp-tedge)][-N_b:]
+    mr_phi = np.arange(li.t.size)[li.t > (tp+tedge)][:N_a]
+
+    A = abs(li.z_out)
+    phi = np.unwrap(np.angle(li.z_out))/(2*np.pi)
+
+    mbAl = np.polyfit(li.t[ml], A[ml], 1)
+    mbAr = np.polyfit(li.t[mr], A[mr], 1)
+
+    mb_phi_l = np.polyfit(li.t[ml_phi], phi[ml_phi], 1, w=dphi_weight_before)
+    mb_phi_r = np.polyfit(li.t[mr_phi], phi[mr_phi], 1, w=dphi_weight_after)
+
+    dA = np.polyval(mbAr, tp) - np.polyval(mbAl, tp)
+    dphi = np.polyval(mb_phi_r, tp) - np.polyval(mb_phi_l, tp)
+
+    return phi0, dA, dphi, A0
+
+
 def measure_dA_dphi_fir(lock, li, tp, dA_dphi_before, dA_dphi_after):
     """Correct for impulsive phase shift at end of pulse time."""
 
@@ -307,7 +365,7 @@ def measure_dA_dphi_fir(lock, li, tp, dA_dphi_before, dA_dphi_after):
 
 
 def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
-                        fp, fc, fs_dec):
+                        fp, fc, fs_dec, updated_version=False):
     groups = fh['data'].keys()
     df = pd.DataFrame(index=pd.MultiIndex.from_product(
         (['data', 'control'], groups), names=['expt', 'ds']))
@@ -402,7 +460,7 @@ def workup_adiabatic_w_control_correct_phase(fh, T_before, T_after, T_bf, T_af,
 
 
 def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_af,
-                                                    fp, fc, fs_dec):
+                                                    fp, fc, fs_dec, updated_version=False):
     groups = fh['ds'][:] #  This might not be right, because I may be screwing up
                          #  which dataset is which when things are randomized?
     df = pd.DataFrame(index=pd.MultiIndex.from_product(
@@ -433,8 +491,10 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
                     gr, tp, T_before, T_after,
                     T_bf, T_af, fp, fc, fs_dec, print_response=print_response,
                     t0=t0)
-
-                phi_at_tp, dA, dphi_tp_end, A_at_tp = measure_dA_dphi_A(lock, li, tp)
+                if updated_version:
+                    phi_at_tp, dA, dphi_tp_end, A_at_tp = measure_dA_dphi_A_2019(lock, li, tp)
+                else:
+                    phi_at_tp, dA, dphi_tp_end, A_at_tp = measure_dA_dphi_A(lock, li, tp)
                 lis[control_or_data].append(li)
                 locks[control_or_data].append(lock)
                 i += 1
@@ -470,6 +530,8 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
 
         df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
                                 - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
+
+        df['dphi_corrected2 [cyc]'] = (df['dphi [cyc]'] - df['A']
 
         df_clean = df.dropna()
         control = df_clean.xs('control')
@@ -896,6 +958,7 @@ def plot_zero_time(extras, figax=None, rcParams={}, filename=None):
 
     return fig, ax
 
+
 def plot_amplitudes(extras, figax=None, rcParams={}, filename=None):
     if figax is None:
         with mpl.rc_context(rcParams):
@@ -911,6 +974,29 @@ def plot_amplitudes(extras, figax=None, rcParams={}, filename=None):
 
     ax.set_xlabel(u"Time [ms]")
     ax.set_ylabel(u"Amplitude [nm]")
+    ax.set_xlim(t[0], t[-1])
+    ax.grid()
+
+    if filename is not None:
+        fig.savefig(filename, bbox_inches='tight')
+    return fig, ax
+
+
+def plot_frequencies(extras, figax=None, rcParams={}, filename=None):
+    if figax is None:
+        with mpl.rc_context(rcParams):
+            fig, ax = plt.subplots()
+    else:
+        fig, ax = figax
+
+    for li in extras['lis']['control']:
+        ax.plot(li.get_t()*1e3, li.df, 'green', alpha=0.5)
+    for li in extras['lis']['data']:
+        t = li.get_t()*1e3
+        ax.plot(t, li.df, 'b', alpha=0.5)
+
+    ax.set_xlabel(u"Time [ms]")
+    ax.set_ylabel(u"Frequency shift [Hz]")
     ax.set_xlim(t[0], t[-1])
     ax.grid()
 
@@ -1190,7 +1276,7 @@ def report_adiabatic_control_phase_corr(filename,
                 T_before, T_after, T_bf, T_af, fp, fc, fs_dec)
         elif format == 'BNC':
             df, extras = workup_adiabatic_w_control_correct_phase_bnc(fh,
-                T_before, T_after, T_bf, T_af, fp, fc, fs_dec)
+                T_before, T_after, T_bf, T_af, fp, fc, fs_dec, True)
 
         d = {'outf_zero_time': basename+'-zerotime.png',
          'outf_phasekick': basename+'-phasekick-uncorrected.png',
@@ -1211,7 +1297,7 @@ def report_adiabatic_control_phase_corr(filename,
         if format == 'BNC':
             d['jupyter_command'] = """df, extras = pk.workup_adiabatic_w_control_correct_phase_bnc(fh,
                         T_before={T_before}, T_after={T_after}, T_bf={T_bf}, T_af={T_af}, fp={fp},
-                        fc={fc}, fs_dec={fs_dec})""".format(**locals())
+                        fc={fc}, fs_dec={fs_dec}, True)""".format(**locals())
         else:
             d['jupyter_command'] = """df, extras = pk.workup_adiabatic_w_control_correct_phase(fh,
                         T_before={T_before}, T_after={T_after}, T_bf={T_bf}, T_af={T_af}, fp={fp},
