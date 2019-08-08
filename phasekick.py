@@ -575,6 +575,122 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
         raise
 
 
+def workup_adiabatic_correct_phase_bnc(fh, T_before, T_after, T_bf, T_af,
+                                                    fp, fc, fs_dec, updated_version=False):
+    groups = fh['ds'][:] #  This might not be right, because I may be screwing up
+                         #  which dataset is which when things are randomized?
+    df = pd.DataFrame(index=pd.MultiIndex.from_product(
+        (['data'], groups), names=['expt', 'ds']))
+    lis = {}
+    locks = {}
+    i = 0
+    for control_or_data in ('data', ):
+        lis[control_or_data] = []
+        locks[control_or_data] = []
+        for tp_group in tqdm(groups):
+            gr = fh[control_or_data][tp_group]
+            print_response = i == 0
+            try:
+                N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
+                t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
+                # Add the half periods to determine the exact length of t2
+                t2 = np.sum(gr["half periods [s]"][:N2even+1])
+                tp = np.sum(gr.attrs["Abrupt BNC565 CantClk.tp tip [s]"])
+                t0 = -(t1 + t2)
+                lock = lockin.adiabatic2lockin(gr, t0=t0)
+                lock.lock2(fp=fp, fc=fc, print_response=False)
+                lock.phase(tf=-t2)
+                f0_V0 = lock.f0corr
+                lock.phase(ti=-t2, tf=0)
+                f0_V1 = lock.f0corr
+                dphi, li = lockin.delta_phi_group(
+                    gr, tp, T_before, T_after,
+                    T_bf, T_af, fp, fc, fs_dec, print_response=print_response,
+                    t0=t0)
+                if updated_version:
+                    phi_at_tp, dA, dphi_tp_end, A_at_tp = measure_dA_dphi_A_2019(lock, li, tp)
+                else:
+                    phi_at_tp, dA, dphi_tp_end, A_at_tp = measure_dA_dphi_A(lock, li, tp)
+                lis[control_or_data].append(li)
+                locks[control_or_data].append(lock)
+                i += 1
+
+                curr_index = (control_or_data, tp_group)
+                df.loc[curr_index, 'tp'] = tp
+                df.loc[curr_index, 'dphi [cyc]'] = dphi / (2*np.pi)
+                df.loc[curr_index, 'f0 [Hz]'] = f0_V0
+                df.loc[curr_index, 'df_dV [Hz]'] = f0_V1 - f0_V0
+                df.loc[curr_index, 'dA [nm]'] = dA
+                df.loc[curr_index, 'dphi_tp_end [cyc]'] = dphi_tp_end
+                df.loc[curr_index, 'phi_at_tp [rad]'] = phi_at_tp
+                df.loc[curr_index, 'A_at_tp [nm]'] = A_at_tp
+                df.loc[curr_index, 'relative time [s]'] = gr['relative time [s]'].value
+
+            except Exception as e:
+                print(e)
+                pass
+
+    try:
+        df.sort_index(inplace=True)
+        print(df)
+
+        df_clean = df.dropna()
+
+
+        data = df_clean.xs('data')
+
+        popt_phi, pcov_phi = optimize.curve_fit(offset_cos,
+            data['phi_at_tp [rad]'], data['dphi_tp_end [cyc]'])
+        popt_A, pcov_A = optimize.curve_fit(offset_cos,
+            data['phi_at_tp [rad]'], data['dA [nm]'])
+
+        df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
+                                - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
+
+
+        df_clean = df.dropna()
+        data = df_clean.xs('data')
+
+        # Issues here; not properly sorted, etc.
+        popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
+        popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
+
+        # Extra information
+        extras = {'popt_phi': popt_phi,
+             'pcov_phi': pcov_phi,
+             'pdiag_phi': np.diagonal(pcov_phi)**0.5,
+             'popt_A': popt_A,
+             'pcov_A': pcov_A,
+             'pdiag_A': np.diagonal(pcov_A)**0.5,
+             'popt_phase_corr': popt_phase_corr,
+             'pcov_phase_corr': pcov_phase_corr,
+             'pdiag_phase_corr': np.diagonal(pcov_phase_corr)**0.5,
+             'popt_phase': popt_phase,
+             'pcov_phase': pcov_phase,
+             'pdiag_phase': np.diagonal(pcov_phase)**0.5,
+             'params': {
+             'T_before': T_before,
+             'T_after': T_after,
+             'T_bf': T_bf,
+             'T_af': T_af,
+             'fp': fp,
+             'fc': fc,
+             'fs_dec': fs_dec,
+             'filename': fh.filename
+             },
+            'file_attrs_str': prnDict(dict(fh.attrs.items()), braces=False),
+            'dataset_attrs_str': prnDict(dict(fh['data/0000'].attrs.items()), braces=False),
+             'lis': lis,
+             'locks': locks}
+
+        return df, extras
+
+    except Exception as e:
+        print(e)
+        raise
+
+
+
 def workup_adiabatic_w_control_correct_phase3(fh, 
                                                   fp, fc, fs_dec,
                                                   w_before=None,
@@ -958,15 +1074,16 @@ def plot_zero_time(extras, figax=None, rcParams={}, filename=None):
     return fig, ax
 
 
-def plot_amplitudes(extras, figax=None, rcParams={}, filename=None):
+def plot_amplitudes(extras, figax=None, rcParams={}, filename=None, control=True):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
     else:
         fig, ax = figax
 
-    for li in extras['lis']['control']:
-        ax.plot(li.get_t()*1e3, abs(li.z_out), 'green', alpha=0.5)
+    if control:
+        for li in extras['lis']['control']:
+            ax.plot(li.get_t()*1e3, abs(li.z_out), 'green', alpha=0.5)
     for li in extras['lis']['data']:
         t = li.get_t()*1e3
         ax.plot(t, abs(li.z_out), 'b', alpha=0.5)
@@ -981,15 +1098,16 @@ def plot_amplitudes(extras, figax=None, rcParams={}, filename=None):
     return fig, ax
 
 
-def plot_frequencies(extras, figax=None, rcParams={}, filename=None):
+def plot_frequencies(extras, figax=None, rcParams={}, filename=None, control=True):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
     else:
         fig, ax = figax
 
-    for li in extras['lis']['control']:
-        ax.plot(li.get_t()*1e3, li.df, 'green', alpha=0.5)
+    if control:
+        for li in extras['lis']['control']:
+            ax.plot(li.get_t()*1e3, li.df, 'green', alpha=0.5)
     for li in extras['lis']['data']:
         t = li.get_t()*1e3
         ax.plot(t, li.df, 'b', alpha=0.5)
@@ -1004,7 +1122,7 @@ def plot_frequencies(extras, figax=None, rcParams={}, filename=None):
     return fig, ax
 
 
-def plot_df0vs_t(df, figax=None, rcParams={}, filename=None):
+def plot_df0vs_t(df, figax=None, rcParams={}, filename=None, control=True):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
@@ -1012,10 +1130,12 @@ def plot_df0vs_t(df, figax=None, rcParams={}, filename=None):
         fig, ax = figax
 
     data = df.loc['data']
-    control = df.loc['control']
+    if control:
+        ds = df.loc['control']
 
     ax.plot(data['relative time [s]'], data['df_dV [Hz]'], 'bo')
-    ax.plot(control['relative time [s]'], control['df_dV [Hz]'], 'go')
+    if control:
+        ax.plot(ds['relative time [s]'], ds['df_dV [Hz]'], 'go')
 
     ax.set_xlabel('Relative time [s]')
     ax.set_ylabel('Frequency shift [Hz]')
@@ -1023,7 +1143,7 @@ def plot_df0vs_t(df, figax=None, rcParams={}, filename=None):
         fig.savefig(filename, bbox_inches='tight')
     return fig, ax
 
-def plot_dA_dphi_vs_t(df, extras, figax=None, rcParams={}, filename=None):
+def plot_dA_dphi_vs_t(df, extras, figax=None, rcParams={}, filename=None, control=True):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, (ax1, ax2) = plt.subplots(nrows=2, sharex=True)
@@ -1032,15 +1152,18 @@ def plot_dA_dphi_vs_t(df, extras, figax=None, rcParams={}, filename=None):
 
     df_sorted = df.sort_values('phi_at_tp [rad]')
 
-    control = df_sorted.loc['control']
-    f0 = control['f0 [Hz]'].median()
+    if control:
+        ds = df_sorted.loc['control']
+    else:
+        ds = df_sorted.loc['data']
+    f0 = ds['f0 [Hz]'].median()
 
-    td = control['phi_at_tp [rad]']/(2*np.pi*f0) * 1e6
-    ax1.plot(td, control['dA [nm]'], 'b.')
-    ax1.plot(td, offset_cos(control['phi_at_tp [rad]'], *extras['popt_A']))
+    td = ds['phi_at_tp [rad]']/(2*np.pi*f0) * 1e6
+    ax1.plot(td, ds['dA [nm]'], 'b.')
+    ax1.plot(td, offset_cos(ds['phi_at_tp [rad]'], *extras['popt_A']))
 
-    ax2.plot(td, control['dphi_tp_end [cyc]']*1e3, 'b.')
-    ax2.plot(td, offset_cos(control['phi_at_tp [rad]'], *extras['popt_phi'])*1e3)
+    ax2.plot(td, ds['dphi_tp_end [cyc]']*1e3, 'b.')
+    ax2.plot(td, offset_cos(ds['phi_at_tp [rad]'], *extras['popt_phi'])*1e3)
 
     ax1.grid()
     ax2.grid()
@@ -1053,7 +1176,7 @@ def plot_dA_dphi_vs_t(df, extras, figax=None, rcParams={}, filename=None):
     return fig, (ax1, ax2)
 
 
-def plot_phasekick(df, extras, figax=None, rcParams={}, filename=None):
+def plot_phasekick(df, extras, figax=None, rcParams={}, filename=None, control=True):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
@@ -1061,7 +1184,8 @@ def plot_phasekick(df, extras, figax=None, rcParams={}, filename=None):
         fig, ax = figax
 
     data = df.loc['data']
-    control = df.loc['control']
+    if control:
+        ds = df.loc['control']
 
     if abs(data['dphi [cyc]']).max() > 0.15:
         units = 'cyc'
@@ -1070,8 +1194,8 @@ def plot_phasekick(df, extras, figax=None, rcParams={}, filename=None):
         units = 'mcyc'
         scale = 1e3
 
-
-    ax.plot(control.tp*1e3, control['dphi [cyc]']*scale, 'g.')
+    if control:
+        ax.plot(ds.tp*1e3, ds['dphi [cyc]']*scale, 'g.')
     ax.plot(data.tp*1e3, data['dphi [cyc]']*scale, 'b.')
     ax.plot(data.tp*1e3, phase_step(data.tp, *extras['popt_phase'])*scale)
 
@@ -1083,7 +1207,7 @@ def plot_phasekick(df, extras, figax=None, rcParams={}, filename=None):
 
     return fig, ax
 
-def plot_phasekick_corrected(df, extras, figax=None, rcParams={}, filename=None):
+def plot_phasekick_corrected(df, extras, figax=None, rcParams={}, filename=None, control=True):
     if figax is None:
         with mpl.rc_context(rcParams):
             fig, ax = plt.subplots()
@@ -1091,7 +1215,8 @@ def plot_phasekick_corrected(df, extras, figax=None, rcParams={}, filename=None)
         fig, ax = figax
 
     data = df.loc['data']
-    control = df.loc['control']
+    if control:
+        control = df.loc['control']
 
     if abs(data['dphi_corrected [cyc]']).max() > 0.15:
         units = 'cyc'
@@ -1100,7 +1225,8 @@ def plot_phasekick_corrected(df, extras, figax=None, rcParams={}, filename=None)
         units = 'mcyc'
         scale = 1e3
 
-    ax.plot(control.tp*1e3, control['dphi_corrected [cyc]']*scale, 'g.')
+    if control:
+        ax.plot(control.tp*1e3, control['dphi_corrected [cyc]']*scale, 'g.')
     ax.plot(data.tp*1e3, data['dphi_corrected [cyc]']*scale, 'b.')
     ax.plot(data.tp*1e3, phase_step(data.tp, *extras['popt_phase_corr'])*scale)
 
@@ -1262,7 +1388,7 @@ To reproduce the plots, run any or all of the commands below:
 """
 
 def report_adiabatic_control_phase_corr(filename,
-    T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename=None, outdir=None, format='DAQ'):
+    T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename=None, outdir=None, format='DAQ', control=True):
     if basename is None:
         basename = os.path.splitext(filename)[0]
 
@@ -1274,7 +1400,11 @@ def report_adiabatic_control_phase_corr(filename,
             df, extras = workup_adiabatic_w_control_correct_phase(fh,
                 T_before, T_after, T_bf, T_af, fp, fc, fs_dec)
         elif format == 'BNC':
-            df, extras = workup_adiabatic_w_control_correct_phase_bnc(fh,
+            if control:
+                df, extras = workup_adiabatic_w_control_correct_phase_bnc(fh,
+                T_before, T_after, T_bf, T_af, fp, fc, fs_dec, True)
+            else:
+                df, extras = workup_adiabatic_correct_phase_bnc(fh,
                 T_before, T_after, T_bf, T_af, fp, fc, fs_dec, True)
 
         d = {'outf_zero_time': basename+'-zerotime.png',
@@ -1294,7 +1424,12 @@ def report_adiabatic_control_phase_corr(filename,
         d['cli_command'] = "--format {format} --basename {basename} {_outdir} --tbf {T_bf} --taf {T_af} {filename} {fp} {fc} {T_before} {T_after}".format(**locals())
 
         if format == 'BNC':
-            d['jupyter_command'] = """df, extras = pk.workup_adiabatic_w_control_correct_phase_bnc(fh,
+            if control:
+                d['jupyter_command'] = """df, extras = pk.workup_adiabatic_w_control_correct_phase_bnc(fh,
+                        T_before={T_before}, T_after={T_after}, T_bf={T_bf}, T_af={T_af}, fp={fp},
+                        fc={fc}, fs_dec={fs_dec}, True)""".format(**locals())
+            else:
+                d['jupyter_command'] = """df, extras = pk.workup_adiabatic_correct_phase_bnc(fh,
                         T_before={T_before}, T_after={T_after}, T_bf={T_bf}, T_af={T_af}, fp={fp},
                         fc={fc}, fs_dec={fs_dec}, True)""".format(**locals())
         else:
@@ -1401,7 +1536,7 @@ def gr2t(gr):
     return np.arange(x.size)*dt + t0
 
 
-def gr2lock(gr, fp=2000, fc=8000):
+def gr2lock(gr, fp=2000, fc=8000, ti=None, tf=None):
     half_periods = gr["half periods [s]"][:]
     N2even = gr.attrs['Calc BNC565 CantClk.N2 (even)']
     t1 = gr.attrs['Abrupt BNC565 CantClk.t1 [s]']
@@ -1413,7 +1548,11 @@ def gr2lock(gr, fp=2000, fc=8000):
     t = np.arange(x.size)*dt + t0
     lock = lockin.LockIn(t, x, 1/dt)
     lock.lock2(fp=fp, fc=fc, print_response=False)
-    lock.phase(ti=tp+0.5e-3, tf=tp+3.5e-3)
+    if ti is None:
+        ti = tp+0.5e-3
+    if tf is None:
+        tf = tp+3.5e-3
+    lock.phase(ti=ti, tf=tf)
     lock.half_periods = half_periods
     lock.tp = tp
     lock.t2 = t2
@@ -1599,16 +1738,17 @@ def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename, saveh5, format, 
 @click.option('--basename', type=str, default=None)
 @click.option('--outdir', type=str, default=None)
 @click.option('--format', type=str, default='DAQ')
+@click.option('--control/--no-control', default=True, help="Workup data without control")
 def report_adiabatic_control_phase_corr_cli(filename,
-    t_before, t_after, tbf, taf, fp, fc, basename, outdir, format):
+    t_before, t_after, tbf, taf, fp, fc, basename, outdir, format, control):
     fs_dec = fc * 4
 
     if basename is None:
     	basename = os.path.splitext(filename)[0]
-    
+
     try:
         report_adiabatic_control_phase_corr(filename,
-    t_before, t_after, tbf, taf, fp, fc, fs_dec, basename, outdir, format)
+    t_before, t_after, tbf, taf, fp, fc, fs_dec, basename, outdir, format, control)
     except Exception as e:
         print(e)
         pass
@@ -1617,11 +1757,13 @@ def report_adiabatic_control_phase_corr_cli(filename,
 def align_and_mask(x, y, xi, xf):
     x_aligned = []
     y_aligned = []
+    m = (x[0] >= xi) & (x[0] < xf)
+    Npts = sum(m)
     for x_, y_ in zip(x, y):
-        m = (x_ >= xi) & (x_ < xf)
-        x_aligned.append(x_[m])
-        y_aligned.append(y_[m])
-    
+        m = (x_ >= xi)
+        x_aligned.append(x_[m][:Npts])
+        y_aligned.append(y_[m][:Npts])
+
     return np.array(x_aligned), np.array(y_aligned)
 
 def gr2t_df(gr, fp, fc, tf, pbar=None, format='BNC'):
@@ -1642,38 +1784,98 @@ def gr2t_df(gr, fp, fc, tf, pbar=None, format='BNC'):
     dfs = [li('df') for li in lis]
     
     return ts, dfs
-    
+
+def gr2t_f(gr, fp, fc, tf, pbar=None, format='BNC'):
+    lis = []
+    for ds in gr.values():
+        if format == 'BNC':
+            li = gr2lock(ds, fp=fp, fc=fc)
+        elif format == "DAQ":
+            li = gr2lock_daq(ds, fp=fp, fc=fc)
+        else:
+            raise ValueError()
+        li.phase(tf=tf)
+        lis.append(li)
+        if pbar is not None:
+            pbar.update()
+
+    ts = [li('t') for li in lis]
+    dfs = [li('df')+li.f0corr for li in lis]
+
+    return ts, dfs
+
+
+
+def gr2t_A(gr, fp, fc, tf, pbar=None, format='BNC'):
+    lis = []
+    for ds in gr.values():
+        if format == 'BNC':
+            li = gr2lock(ds, fp=fp, fc=fc, ti=-1, tf=1)
+        elif format == "DAQ":
+            li = gr2lock_daq(ds, fp=fp, fc=fc, ti=-1, tf=1)
+        else:
+            raise ValueError()
+        li.phase(tf=tf)
+        lis.append(li)
+        if pbar is not None:
+            pbar.update()
+
+    ts = [li('t') for li in lis]
+    As = [li('A') for li in lis]
+
+    return ts, As
+
+
 class AverageTrEFM(object):
     def __init__(self, ts, dfs, t_initial, t_final):
         self.ts = ts
         self.dfs = dfs
         self.t_initial = t_initial
         self.t_final = t_final
-        
+
+        t_initial_min = max([t[0] for t in ts])
+        t_final_max = min([t[-1] for t in ts])
+        if t_initial < t_initial:
+            print("t_initial is too small.")
+            self.t_initial = t_initial_min
+        if t_initial < t_initial:
+            print("t_final is too large.")
+            self.t_final = t_final_max
+
         self.t, self.df = align_and_mask(ts, dfs,
                                          t_initial, t_final)
-        
+
         self.tm = np.mean(self.t, axis=0)
         self.tm_ms = self.tm*1e3
         self.tm_us = self.tm*1e6
         self.dfm = np.mean(self.df, axis=0)
         self.t50 = self.tp(50)
         self.df50 = self.dfp(50)
-    
+
     def tp(self, p):
         return np.percentile(self.t, p, axis=0)
-    
+
     def tp_ms(self, p):
         return self.tp(p)*1e3
-    
+
     def tp_us(self, p):
         return self.tp(p)*1e6
-    
+
     def dfp(self, p):
         return np.percentile(self.df, p, axis=0)
-    
+
     @classmethod
     def from_group(cls, gr, fp, fc, tf, t_initial, t_final, pbar=None, format='BNC'):
         ts, dfs = gr2t_df(gr, fp, fc, tf, pbar=pbar, format=format)
-        
+
         return cls(ts, dfs, t_initial, t_final,)
+
+    @classmethod
+    def from_group_f(cls, gr, fp, fc, tf, t_initial, t_final, pbar=None, format='BNC'):
+        ts, dfs = gr2t_f(gr, fp, fc, tf, pbar=pbar, format=format)
+        return cls(ts, dfs, t_initial, t_final,)
+
+    @classmethod
+    def from_group_A(cls, gr, fp, fc, tf, t_initial, t_final, pbar=None, format='BNC'):
+        ts, As = gr2t_A(gr, fp, fc, tf, pbar=pbar, format=format)
+        return cls(ts, As, t_initial, t_final)
