@@ -572,6 +572,8 @@ def workup_adiabatic_w_control_correct_phase_bnc(fh, T_before, T_after, T_bf, T_
 
     except Exception as e:
         print(e)
+        print(e.args)
+        print(sys.exc_info())
         raise
 
 
@@ -628,6 +630,8 @@ def workup_adiabatic_correct_phase_bnc(fh, T_before, T_after, T_bf, T_af,
 
             except Exception as e:
                 print(e)
+                print(e.args)
+                print(sys.exc_info())
                 pass
 
     try:
@@ -635,8 +639,6 @@ def workup_adiabatic_correct_phase_bnc(fh, T_before, T_after, T_bf, T_af,
         print(df)
 
         df_clean = df.dropna()
-
-
         data = df_clean.xs('data')
 
         popt_phi, pcov_phi = optimize.curve_fit(offset_cos,
@@ -646,7 +648,6 @@ def workup_adiabatic_correct_phase_bnc(fh, T_before, T_after, T_bf, T_af,
 
         df['dphi_corrected [cyc]'] = (df['dphi [cyc]']
                                 - offset_cos(df['phi_at_tp [rad]'], *popt_phi))
-
 
         df_clean = df.dropna()
         data = df_clean.xs('data')
@@ -687,6 +688,8 @@ def workup_adiabatic_correct_phase_bnc(fh, T_before, T_after, T_bf, T_af,
 
     except Exception as e:
         print(e)
+        print(e.args)
+        print(sys.exc_info())
         raise
 
 
@@ -824,7 +827,7 @@ def workup_adiabatic_w_control_correct_phase_bnc2(fh,
                                                   before_fir=None,
                                                   after_fir=None,
                                                   ):
-    tps = fh['tp tip [s]'][:] # ms to s
+    tps = fh['tp tip [s]'][:]
     tp_groups = fh['ds'][:]
     df = pd.DataFrame(index=pd.MultiIndex.from_product(
         (['data', 'control'], tp_groups), names=['expt', 'ds']))
@@ -901,7 +904,6 @@ def workup_adiabatic_w_control_correct_phase_bnc2(fh,
         control = df_clean.xs('control')
         data = df_clean.xs('data')
 
-
         popt_phase_corr, pcov_phase_corr = optimize.curve_fit(phase_step, data['tp'], data['dphi_corrected [cyc]'])
         popt_phase, pcov_phase = optimize.curve_fit(phase_step, data['tp'], data['dphi [cyc]'])
 
@@ -951,7 +953,6 @@ def workup_adiabatic_w_control_correct_phase_bnc3(fh,
 
     N_dec = int(fs/fs_dec)
 
-
     for control_or_data in ('control', 'data'):
         lis[control_or_data] = []
         locks[control_or_data] = []
@@ -966,7 +967,7 @@ def workup_adiabatic_w_control_correct_phase_bnc3(fh,
             t0 = -(t1 + t2)
             x = gr['cantilever-nm'][:]
 
-            lock, li = phasekick2.individual_phasekick2(x, dt, t0, t1, t2, tp, 
+            lock, li = phasekick2.individual_phasekick2(x, dt, t0, t1, t2, tp,
                 N_dec, lock_fir, w_before, w_after)
             dphi = li.delta_phi
 
@@ -1107,14 +1108,15 @@ def plot_frequencies(extras, figax=None, rcParams={}, filename=None, control=Tru
 
     if control:
         for li in extras['lis']['control']:
-            ax.plot(li.get_t()*1e3, li.df, 'green', alpha=0.5)
+            t = li.get_t()
+            ax.plot(t*1e3, li.df+li.f0(t), 'green', alpha=0.3)
     for li in extras['lis']['data']:
-        t = li.get_t()*1e3
-        ax.plot(t, li.df, 'b', alpha=0.5)
+        t = li.get_t()
+        ax.plot(t*1e3, li.df+li.f0(t), 'b', alpha=0.3)
 
     ax.set_xlabel(u"Time [ms]")
     ax.set_ylabel(u"Frequency shift [Hz]")
-    ax.set_xlim(t[0], t[-1])
+    ax.set_xlim(t[0]*1e3, t[-1]*1e3)
     ax.grid()
 
     if filename is not None:
@@ -1142,6 +1144,7 @@ def plot_df0vs_t(df, figax=None, rcParams={}, filename=None, control=True):
     if filename is not None:
         fig.savefig(filename, bbox_inches='tight')
     return fig, ax
+
 
 def plot_dA_dphi_vs_t(df, extras, figax=None, rcParams={}, filename=None, control=True):
     if figax is None:
@@ -1207,6 +1210,7 @@ def plot_phasekick(df, extras, figax=None, rcParams={}, filename=None, control=T
 
     return fig, ax
 
+
 def plot_phasekick_corrected(df, extras, figax=None, rcParams={}, filename=None, control=True):
     if figax is None:
         with mpl.rc_context(rcParams):
@@ -1263,11 +1267,11 @@ def img2uri(html_text):
         if 'http' not in image_path:
             base64_text = base64.b64encode(open(image_path, 'rb').read())
             ext = file_extension(image_path)
-            
+
             image_tag.attrs['src'] = (
                 "data:image/{ext};base64,{base64_text}".format(
                     ext=ext, base64_text=base64_text)
-                )
+                                      )
 
     return soup.prettify("utf-8")
 
@@ -1326,7 +1330,7 @@ Corrected best fit parameters
 
 .. image:: {outf_phasekick_corr}
 
-Amplitude phase response 
+Amplitude phase response
 ------------------------
 
 .. image:: {outf_amp_phase_resp}
@@ -1343,6 +1347,10 @@ Amplitudes
 
 .. image:: {outf_amplitudes}
 
+Frequencies
+-----------
+
+.. image:: {outf_frequencies}
 
 Zero time
 ---------
@@ -1377,15 +1385,17 @@ To replicate this analysis in a Jupyter notebook, open the notebook and run the 
 
 To reproduce the plots, run any or all of the commands below:
 
-:: 
+::
 
-    pk.plot_zero_time(extras)
-    pk.plot_phasekick(df, extras,)
-    pk.plot_phasekick_corrected(df, extras)
-    pk.plot_amplitudes(extras)
-    pk.plot_df0vs_t(df)
-    pk.plot_dA_dphi_vs_t(df, extras)
+    pk.plot_zero_time(extras,)
+    pk.plot_phasekick(df, extras, {control_false})
+    pk.plot_phasekick_corrected(df, extras, {control_false})
+    pk.plot_amplitudes(extras, {control_false})
+    pk.plot_frequencies(extras, {control_false})
+    pk.plot_df0vs_t(df, {control_false})
+    pk.plot_dA_dphi_vs_t(df, extras, {control_false})
 """
+
 
 def report_adiabatic_control_phase_corr(filename,
     T_before, T_after, T_bf, T_af, fp, fc, fs_dec, basename=None, outdir=None, format='DAQ', control=True):
@@ -1401,9 +1411,11 @@ def report_adiabatic_control_phase_corr(filename,
                 T_before, T_after, T_bf, T_af, fp, fc, fs_dec)
         elif format == 'BNC':
             if control:
+                control_false = ""
                 df, extras = workup_adiabatic_w_control_correct_phase_bnc(fh,
                 T_before, T_after, T_bf, T_af, fp, fc, fs_dec, True)
             else:
+                control_false = "control=False"  # Format string for report
                 df, extras = workup_adiabatic_correct_phase_bnc(fh,
                 T_before, T_after, T_bf, T_af, fp, fc, fs_dec, True)
 
@@ -1411,10 +1423,12 @@ def report_adiabatic_control_phase_corr(filename,
          'outf_phasekick': basename+'-phasekick-uncorrected.png',
          'outf_phasekick_corr': basename+'-phasekick-corrected.png',
          'outf_amplitudes': basename+'-amplitude.png',
+         'outf_frequencies': basename+'frequencies.png',
          'outf_frequency_shift': basename+'-frequency-shift.png',
-         'outf_amp_phase_resp': basename+'-dA-dphi.png',}
+         'outf_amp_phase_resp': basename+'-dA-dphi.png'}
 
         d.update(extras)
+        d['control_false'] = control_false
 
         if outdir is None:
             _outdir = ''
@@ -1440,20 +1454,19 @@ def report_adiabatic_control_phase_corr(filename,
         d['filename'] = filename
         # All of the plots
         plot_zero_time(extras, filename=d['outf_zero_time'])
-        plot_phasekick(df, extras, filename=d['outf_phasekick'])
+        plot_phasekick(df, extras, filename=d['outf_phasekick'], control=control)
         plot_phasekick_corrected(df, extras,
-            filename=d['outf_phasekick_corr'])
-        plot_amplitudes(extras, filename=d['outf_amplitudes'])
-        plot_df0vs_t(df, filename=d['outf_frequency_shift'])
-        plot_dA_dphi_vs_t(df, extras, filename=d['outf_amp_phase_resp'])
-
+            filename=d['outf_phasekick_corr'], control=control)
+        plot_amplitudes(extras, filename=d['outf_amplitudes'], control=control)
+        plot_frequencies(extras, filename=d['outf_frequencies'], control=control)
+        plot_df0vs_t(df, filename=d['outf_frequency_shift'], control=control)
+        plot_dA_dphi_vs_t(df, extras, filename=d['outf_amp_phase_resp'],
+                          control=control)
 
     ReST = ReST_temp3.format(params_str=prnDict(extras['params'], braces=False),
-                            **d)
+                             **d)
     image_dependent_html = docutils.core.publish_string(ReST, writer_name='html')
     self_contained_html = unicode(img2uri(image_dependent_html), 'utf8')
-
-
 
     # io module instead of built-in open because it allows specifying
     # encoding. See http://stackoverflow.com/a/22288895/2823213
@@ -1476,7 +1489,7 @@ def report_adiabatic_control_phase_corr3(df, extras, basename=None, outdir=None)
     if outdir is not None:
         basename = os.path.join(outdir, os.path.basename(basename))
 
-    
+
     d = {
     'basename': basename,
     'outf_zero_time': basename+'-zerotime.png',
@@ -1487,7 +1500,6 @@ def report_adiabatic_control_phase_corr3(df, extras, basename=None, outdir=None)
      'outf_amp_phase_resp': basename+'-dA-dphi.png',}
 
     d.update(extras)
-
 
     plot_zero_time(extras, filename=d['outf_zero_time'])
     plot_phasekick(df, extras, filename=d['outf_phasekick'])
@@ -1559,6 +1571,7 @@ def gr2lock(gr, fp=2000, fc=8000, ti=None, tf=None):
     lock.t1 = t1
     return lock
 
+
 def gr2lock_daq(gr, fp=2000, fc=8000):
     t1 = gr.attrs['Adiabatic Parameters.t1 [ms]'] * 0.001
     t2 = gr.attrs['Adiabatic Parameters.t2 [ms]'] * 0.001
@@ -1620,7 +1633,7 @@ def workup_df(fname_or_fh, fp, fc, tmin, tmax,
                 'tfphase': tfphase,
                 'butter': butter
             },
-            }
+        }
 
     if periodogram:
         psd_f, psd_phi = signal.periodogram(dphis_masked/(2*np.pi), fs=li.fs, detrend='linear')
@@ -1725,26 +1738,29 @@ def df_vs_t_cli(filename, fp, fc, tmin, tmax, outdir, basename, saveh5, format, 
     workup_df_plot(filename, basename+'.png', fp, fc, tmin, tmax, saveh5, format, group)
 
 
-
-
 @click.command()
 @click.argument('filename', type=click.Path())
 @click.argument('fp', type=float)
-@click.argument('fc', type=float)
+@click.argument('fc', type=float, )
 @click.argument('t_before', type=float)
 @click.argument('t_after', type=float)
 @click.option('--tbf', type=float, default=0.001)
 @click.option('--taf', type=float, default=0.001)
-@click.option('--basename', type=str, default=None)
-@click.option('--outdir', type=str, default=None)
-@click.option('--format', type=str, default='DAQ')
+@click.option('--basename', type=str, default=None, help="Name to use for html report.")
+@click.option('--outdir', type=str, default=None, help="Output directory to save report.")
+@click.option('--format', type=str, default='DAQ', help="HDF5 data file type (DAQ or BNC)")
 @click.option('--control/--no-control', default=True, help="Workup data without control")
 def report_adiabatic_control_phase_corr_cli(filename,
-    t_before, t_after, tbf, taf, fp, fc, basename, outdir, format, control):
+        t_before, t_after, tbf, taf, fp, fc, basename, outdir, format, control):
+    """Workup hdf5 file for pk-EFM experiment.
+
+    fp    LIA passes frequencies <fp (Hz)
+    fc    LIA strongly blocks frequencies >fc (Hz)"""
     fs_dec = fc * 4
+    print("control = {}".format(control))
 
     if basename is None:
-    	basename = os.path.splitext(filename)[0]
+        basename = os.path.splitext(filename)[0]
 
     try:
         report_adiabatic_control_phase_corr(filename,
@@ -1765,6 +1781,7 @@ def align_and_mask(x, y, xi, xf):
         y_aligned.append(y_[m][:Npts])
 
     return np.array(x_aligned), np.array(y_aligned)
+
 
 def gr2t_df(gr, fp, fc, tf, pbar=None, format='BNC'):
     lis = []
@@ -1828,6 +1845,7 @@ def gr2t_A(gr, fp, fc, tf, pbar=None, format='BNC'):
 
 class AverageTrEFM(object):
     def __init__(self, ts, dfs, t_initial, t_final):
+        """Signal average tr-EFM data."""
         self.ts = ts
         self.dfs = dfs
         self.t_initial = t_initial
