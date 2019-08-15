@@ -1783,8 +1783,9 @@ def align_and_mask(x, y, xi, xf):
     return np.array(x_aligned), np.array(y_aligned)
 
 
-def gr2t_df(gr, fp, fc, tf, pbar=None, format='BNC'):
-    lis = []
+def gr2t_df(gr, fp, fc, tf, pbar=None, format='BNC', dec=1):
+    ts = []
+    dfs = []
     for ds in gr.values():
         if format == 'BNC':
             li = gr2lock(ds, fp=fp, fc=fc)
@@ -1793,17 +1794,17 @@ def gr2t_df(gr, fp, fc, tf, pbar=None, format='BNC'):
         else:
             raise ValueError()
         li.phase(tf=tf)
-        lis.append(li)
+        ts.append(li('t')[::dec]) 
+        dfs.append(li('df')[::dec])
+
         if pbar is not None:
             pbar.update()
-        
-    ts = [li('t') for li in lis]
-    dfs = [li('df') for li in lis]
-    
+
     return ts, dfs
 
-def gr2t_f(gr, fp, fc, tf, pbar=None, format='BNC'):
-    lis = []
+def gr2t_f(gr, fp, fc, tf, pbar=None, format='BNC', dec=1):
+    ts = []
+    dfs = []
     for ds in gr.values():
         if format == 'BNC':
             li = gr2lock(ds, fp=fp, fc=fc)
@@ -1812,19 +1813,18 @@ def gr2t_f(gr, fp, fc, tf, pbar=None, format='BNC'):
         else:
             raise ValueError()
         li.phase(tf=tf)
-        lis.append(li)
+        ts.append(li('t')[::dec])
+        dfs.append(li('df')[::dec]+li.f0corr)
+
         if pbar is not None:
             pbar.update()
-
-    ts = [li('t') for li in lis]
-    dfs = [li('df')+li.f0corr for li in lis]
 
     return ts, dfs
 
 
-
-def gr2t_A(gr, fp, fc, tf, pbar=None, format='BNC'):
-    lis = []
+def gr2t_A(gr, fp, fc, tf, pbar=None, format='BNC', dec=1):
+    ts = []
+    As = []
     for ds in gr.values():
         if format == 'BNC':
             li = gr2lock(ds, fp=fp, fc=fc, ti=-1, tf=1)
@@ -1833,12 +1833,11 @@ def gr2t_A(gr, fp, fc, tf, pbar=None, format='BNC'):
         else:
             raise ValueError()
         li.phase(tf=tf)
-        lis.append(li)
+        ts.append(li('t')[::dec])
+        As.append(li('A')[::dec])
+
         if pbar is not None:
             pbar.update()
-
-    ts = [li('t') for li in lis]
-    As = [li('A') for li in lis]
 
     return ts, As
 
@@ -1883,17 +1882,20 @@ class AverageTrEFM(object):
         return np.percentile(self.df, p, axis=0)
 
     @classmethod
-    def from_group(cls, gr, fp, fc, tf, t_initial, t_final, pbar=None, format='BNC'):
-        ts, dfs = gr2t_df(gr, fp, fc, tf, pbar=pbar, format=format)
+    def from_group(cls, gr, fp, fc, tf, t_initial, t_final, pbar=None,
+                    format='BNC', dec=1):
+        ts, dfs = gr2t_df(gr, fp, fc, tf, pbar=pbar, format=format, dec=dec)
 
         return cls(ts, dfs, t_initial, t_final,)
 
     @classmethod
-    def from_group_f(cls, gr, fp, fc, tf, t_initial, t_final, pbar=None, format='BNC'):
-        ts, dfs = gr2t_f(gr, fp, fc, tf, pbar=pbar, format=format)
+    def from_group_f(cls, gr, fp, fc, tf, t_initial, t_final, pbar=None,
+            format='BNC', dec=1):
+        ts, dfs = gr2t_f(gr, fp, fc, tf, pbar=pbar, format=format, dec=dec)
         return cls(ts, dfs, t_initial, t_final,)
 
     @classmethod
-    def from_group_A(cls, gr, fp, fc, tf, t_initial, t_final, pbar=None, format='BNC'):
-        ts, As = gr2t_A(gr, fp, fc, tf, pbar=pbar, format=format)
+    def from_group_A(cls, gr, fp, fc, tf, t_initial, t_final,
+            pbar=None, format='BNC', dec=1):
+        ts, As = gr2t_A(gr, fp, fc, tf, pbar=pbar, format=format, dec=dec)
         return cls(ts, As, t_initial, t_final)
